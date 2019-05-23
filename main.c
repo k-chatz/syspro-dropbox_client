@@ -11,7 +11,7 @@
 #define RESET "\x1B[0m"
 
 typedef struct client {
-    struct in_addr ip;
+    in_addr_t ip;
     in_port_t port;
 } Client;
 
@@ -82,8 +82,10 @@ int main(int argc, char *argv[]) {
     char *dirname = NULL, *serverIP = NULL, hostbuffer[256], *ip = NULL;
     int opt = 1, workerThreads = 0, bufferSize = 0, fd_client = 0, hostname = 0;
     void *buffer = NULL;
-    size_t socket_size = 0;
-    socklen_t st_len = 0;
+
+    size_t socket_rcv_size = 0, socket_snd_size = 0;
+    socklen_t st_rcv_len = 0, st_snd_len = 0;
+
     struct sockaddr *server_ptr = NULL, *client_ptr = NULL;
     struct sockaddr_in server, client;
     struct hostent *host_entry;
@@ -94,7 +96,8 @@ int main(int argc, char *argv[]) {
     /* Read argument options from command line*/
     readOptions(argc, argv, &dirname, &portNum, &workerThreads, &bufferSize, &serverPort, &serverIP);
 
-    st_len = sizeof(socket_size);
+    st_rcv_len = sizeof(socket_rcv_size);
+    st_snd_len = sizeof(socket_snd_size);
 
     server_ptr = (struct sockaddr *) &server;
     client_ptr = (struct sockaddr *) &client;
@@ -107,9 +110,11 @@ int main(int argc, char *argv[]) {
         perror("socket");
     }
 
-    getsockopt(fd_client, SOL_SOCKET, SO_RCVBUF, (void *) &socket_size, &st_len);
+    getsockopt(fd_client, SOL_SOCKET, SO_RCVBUF, (void *) &socket_rcv_size, &st_rcv_len);
 
-    buffer = malloc(socket_size + 1);
+    getsockopt(fd_client, SOL_SOCKET, SO_SNDBUF, (void *) &socket_snd_size, &st_snd_len);
+
+    buffer = malloc(socket_rcv_size + 1);
 
     /* Config*/
     if (setsockopt(fd_client, SOL_SOCKET, SO_REUSEADDR, (char *) &opt, sizeof(opt)) < 0) {
@@ -127,7 +132,7 @@ int main(int argc, char *argv[]) {
     client.sin_addr.s_addr = inet_addr(ip);
     client.sin_port = htons(portNum);
 
-    printf("Bind client to %s:%d address ...\n", inet_ntoa(client.sin_addr), ntohs(client.sin_port));
+    printf("Bind socket to %s:%d address ...\n", inet_ntoa(client.sin_addr), ntohs(client.sin_port));
     if (bind(fd_client, client_ptr, sizeof(struct sockaddr_in)) < 0) {
         perror("bind");
         exit(EXIT_FAILURE);
@@ -144,21 +149,33 @@ int main(int argc, char *argv[]) {
     } else {
         printf("Connect to server %s:%d sussessfully!\n", inet_ntoa(server.sin_addr), ntohs(server.sin_port));
 
-        send(fd_client, "LOG_ON", 7, 0);
-        //send(fd_client, &server.sin_addr, sizeof(server.sin_addr), 0);
-        //send(fd_client, &server.sin_port, sizeof(server.sin_port), 0);
-        //send(fd_client, "END", 10, 0);
-        //shutdown(fd_client, SHUT_WR);
+        Client c;
+        c.ip = client.sin_addr.s_addr;
+        c.port = client.sin_port;
 
-        bytes = recv(fd_client, buffer, socket_size, 0);
-        printf("Receive %ld bytes from socket %d\n", bytes, fd_client);
-        if (bytes == 0) {
-            close(fd_client);
-        } else if (bytes > 0) {
-            printf("Received content:\n"COLOR"%s"RESET"\n", (char *) buffer);
-        } else {
-            perror("recv");
-        }
+        send(fd_client, "LAG_ON\n", 7, 0);
+        send(fd_client, "KWSTARIKANOS\n", 13, 0);
+        send(fd_client, "COSTAS\n", 7, 0);
+        send(fd_client, "CHATZOPOULOS\n", 13, 0);
+        send(fd_client, "MSI\n", 4, 0);
+        send(fd_client, "DELL\n", 5, 0);
+        send(fd_client, "ALIENWARE\n", 10, 0);
+        send(fd_client, "NETBOOK\n", 8, 0);
+
+        //send(fd_client, &c, sizeof(Client), 0);
+        shutdown(fd_client, SHUT_WR);
+
+        do {
+            bytes = recv(fd_client, buffer, socket_rcv_size, MSG_DONTWAIT);
+            printf("Receive %ld bytes from socket %d\n", bytes, fd_client);
+            if (bytes == 0) {
+                close(fd_client);
+            } else if (bytes > 0) {
+                printf("Received content:\n"COLOR"%s"RESET"\n", (char *) buffer);
+            } else {
+                perror("recv");
+            }
+        } while (bytes > 0);
     }
     return 0;
 }
