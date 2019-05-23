@@ -85,3 +85,4 @@ fabric.properties
 /mirror_client
 
 # End of https://www.gitignore.io/api/clion
+/client

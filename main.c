@@ -13,7 +13,7 @@
 typedef struct client {
     in_addr_t ip;
     in_port_t port;
-} Client;
+} *Client;
 
 void wrongOptionValue(char *opt, char *val) {
     fprintf(stderr, "\nWrong value [%s] for option '%s'\n", val, opt);
@@ -149,24 +149,18 @@ int main(int argc, char *argv[]) {
     } else {
         printf("Connect to server %s:%d sussessfully!\n", inet_ntoa(server.sin_addr), ntohs(server.sin_port));
 
-        Client c;
-        c.ip = client.sin_addr.s_addr;
-        c.port = client.sin_port;
-
-        send(fd_client, "LAG_ON\n", 7, 0);
-        send(fd_client, "KWSTARIKANOS\n", 13, 0);
-        send(fd_client, "COSTAS\n", 7, 0);
-        send(fd_client, "CHATZOPOULOS\n", 13, 0);
-        send(fd_client, "MSI\n", 4, 0);
-        send(fd_client, "DELL\n", 5, 0);
-        send(fd_client, "ALIENWARE\n", 10, 0);
-        send(fd_client, "NETBOOK\n", 8, 0);
+        Client c = malloc(sizeof(struct client));
+        c->ip = client.sin_addr.s_addr;
+        c->port = client.sin_port;
+        send(fd_client, "LOG_ON", 6, 0);
+        send(fd_client, c, sizeof(struct client), 0);
 
         //send(fd_client, &c, sizeof(Client), 0);
         shutdown(fd_client, SHUT_WR);
 
         do {
-            bytes = recv(fd_client, buffer, socket_rcv_size, MSG_DONTWAIT);
+            bzero(buffer, socket_rcv_size);
+            bytes = recv(fd_client, buffer, socket_rcv_size, 0);
             printf("Receive %ld bytes from socket %d\n", bytes, fd_client);
             if (bytes == 0) {
                 close(fd_client);
