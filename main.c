@@ -8,6 +8,7 @@
 #include <netdb.h>
 #include <signal.h>
 #include <errno.h>
+#include <pthread.h>
 #include "list.h"
 
 #define COLOR "\x1B[33m"
@@ -31,9 +32,27 @@ typedef struct rmf {
     int version;
 } RemoteFile;
 
+typedef struct {
+    RemoteFile *data;
+    int start;
+    int end;
+    int count;
+} pool_t;
+
+pthread_mutex_t mtx_client_list, mtx_pool;
+pthread_cond_t cond_nonempty;
+pthread_cond_t cond_nonfull;
+pool_t pool;
+
 static volatile int quit_request = 0;
 
 List list = NULL;
+
+void initialize(pool_t *pool) {
+    pool->start = 0;
+    pool->end = -1;
+    pool->count = 0;
+}
 
 void wrongOptionValue(char *opt, char *val) {
     fprintf(stderr, "\nWrong value [%s] for option '%s'\n", val, opt);
@@ -145,38 +164,39 @@ Client createClient(in_addr_t addr, in_port_t port) {
 /**
  * Handle requests.*/
 void requestHandler(int fd_client, void *buffer) {
+    unsigned int clients = 0;
+    Client c = NULL;
+
     if (strncmp(buffer, "GET_FILE_LIST", 13) == 0) {
         printf("REQUEST: GET_FILE_LIST\n");
+        /*TODO: Get file version like this: printf("|%ld|", s.st_ctim.tv_nsec );*/
     } else if (strncmp(buffer, "GET_FILE", 8) == 0) {
         printf("REQUEST: GET_FILE\n");
+
     } else if (strncmp(buffer, "USER_OFF", 8) == 0) {
         printf("REQUEST: USER_OFF\n");
+
     } else if (strncmp(buffer, "LOG_ON_SUCCESS", 14) == 0) {
         printf("RESPONSE: LOG_ON_SUCCESS\n");
+
     } else if (strncmp(buffer, "ALREADY_LOGGED_IN", 17) == 0) {
         printf("RESPONSE: ALREADY_LOGGED_IN\n");
+
     } else if (strncmp(buffer, "CLIENT_LIST", 11) == 0) {
         printf("RESPONSE: CLIENT_LIST\n");
 
-/*        bzero(rcv_buffer, socket_rcv_size);
-        if ((bytes = recv(fd_client, rcv_buffer, 11, 0)) < 0) {
-            perror("recv");
-        }
-        printf(COLOR"\n%s "RESET, (char *) rcv_buffer);
+        int offset = 11;
 
-        if ((bytes = recv(fd_client, &clients, sizeof(unsigned int), 0)) < 0) {
-            perror("recv");
-        }
+        memcpy(&clients, buffer + offset, sizeof(unsigned int));
+
+        offset = offset + sizeof(unsigned int);
 
         printf(COLOR"%d "RESET, clients);
+
         for (int i = 0; i < clients; i++) {
             c = malloc(sizeof(struct client));
-
-            if ((bytes = recv(fd_client, c, sizeof(struct client), 0)) < 0) {
-                perror("recv");
-                break;
-            }
-
+            memcpy(c, buffer + offset, sizeof(struct client));
+            offset = offset + sizeof(struct client);
             listInsert(list, c);
             struct sockaddr_in addr;
             addr.sin_family = AF_INET;
@@ -184,17 +204,22 @@ void requestHandler(int fd_client, void *buffer) {
             addr.sin_port = c->port;
             printf(COLOR"<%s, %d> "RESET, inet_ntoa(addr.sin_addr), ntohs(c->port));
         }
-        printf("\n");*/
-
+        printf("\n");
     } else if (strncmp(buffer, "ERROR_IP_PORT_NOT_FOUND_IN_LIST", 31) == 0) {
         printf("RESPONSE: ERROR_IP_PORT_NOT_FOUND_IN_LIST\n");
+
     } else if (strncmp(buffer, "ERROR_NOT_REMOVED", 17) == 0) {
         printf("RESPONSE: ERROR_NOT_REMOVED\n");
+
+    } else if (strncmp(buffer, "LOG_OFF_SUCCESS", 15) == 0) {
+        printf("RESPONSE: LOG_OFF_SUCCESS\n");
+
     } else if (strncmp(buffer, "UNKNOWN_COMMAND", 15) == 0) {
         printf("RESPONSE: UNKNOWN_COMMAND\n");
+
     } else {
         fprintf(stderr, "UNKNOWN_COMMAND\n");
-        send(fd_client, "UNKNOWN_COMMAND", 15, 0);
+        //send(fd_client, "UNKNOWN_COMMAND", 15, 0);
     }
 }
 
@@ -203,27 +228,31 @@ int main(int argc, char *argv[]) {
     struct sockaddr *server_ptr = NULL, *client_ptr = NULL, *listen_ptr = NULL;
     struct sockaddr_in server_in_addr, client_in_addr, listen_in_addr;
     struct sockaddr_in new_client_in_addr;
+    struct in_addr currentHostAddr;
+
     struct hostent *hostEntry = NULL;
     struct timespec timeout;
     struct sigaction sa;
     int opt = 1, lfd = 0, workerThreads = 0, bufferSize = 0, fd_listen = 0, fd_client = 0, fd_new_client = 0, activity = 0, fd_active = 0;
-    char *dirname = NULL, *serverIP = NULL, hostBuffer[256], *currentHostIp = NULL;
+    char *dirname = NULL, *serverIP = NULL, hostBuffer[256], *currentHostStrIp = NULL;
     unsigned int clients = 0;
     void *rcv_buffer = NULL;
     uint16_t portNum = 0, serverPort = 0;
     ssize_t bytes = 0;
-
     Session s[FD_SETSIZE];
     fd_set set, read_fds;
     size_t socket_rcv_size = 0, socket_snd_size = 0;
     socklen_t st_rcv_len = 0, st_snd_len = 0;
     socklen_t client_len = 0;
-    Client c;
+    Client c = NULL;
 
     /* Read argument options from command line*/
     readOptions(argc, argv, &dirname, &portNum, &workerThreads, &bufferSize, &serverPort, &serverIP);
 
-    timeout.tv_sec = 60;
+    pthread_mutex_init(&mtx_client_list, 0);
+    pthread_mutex_init(&mtx_pool, 0);
+
+    timeout.tv_sec = 5;
     timeout.tv_nsec = 0;
 
     /* Initialize file descriptor sets.*/
@@ -248,8 +277,8 @@ int main(int argc, char *argv[]) {
     /* Get ip and name of current host.*/
     gethostname(hostBuffer, sizeof(hostBuffer));
     hostEntry = gethostbyname(hostBuffer);
-    currentHostIp = strdup(inet_ntoa(*((struct in_addr *) hostEntry->h_addr_list[0])));
-
+    currentHostAddr = *((struct in_addr *) hostEntry->h_addr_list[0]);
+    currentHostStrIp = strdup(inet_ntoa(currentHostAddr));
 
     st_rcv_len = sizeof(socket_rcv_size);
     st_snd_len = sizeof(socket_snd_size);
@@ -324,7 +353,8 @@ int main(int argc, char *argv[]) {
             lfd = fd_client;
         }
         send(fd_client, "LOG_ON", 6, 0);
-        c = createClient(client_in_addr.sin_addr.s_addr, client_in_addr.sin_port);
+
+        c = createClient(currentHostAddr.s_addr, htons(portNum));
         send(fd_client, c, sizeof(struct client), 0);
         free(c);
         shutdown(fd_client, SHUT_WR);
@@ -340,15 +370,17 @@ int main(int argc, char *argv[]) {
             lfd = fd_client;
         }
         send(fd_client, "GET_CLIENTS", 11, 0);
-        c = createClient(client_in_addr.sin_addr.s_addr, client_in_addr.sin_port);
+        c = createClient(currentHostAddr.s_addr, htons(portNum));
         send(fd_client, c, sizeof(struct client), 0);
         free(c);
         shutdown(fd_client, SHUT_WR);
     }
 
-    /*****************************************************************************************************/
+    //TODO: Create circular buffer
 
-    printf("Waiting for connections on %s:%d ... \n", currentHostIp, portNum);
+    /****************************************************************************************************/
+
+    printf("Waiting for connections on %s:%d ... \n", currentHostStrIp, portNum);
     while (!quit_request) {
         read_fds = set;
         activity = pselect(lfd + 1, &read_fds, NULL, NULL, &timeout, &oldset);
@@ -414,7 +446,11 @@ int main(int argc, char *argv[]) {
                                s[fd_active].chunks, fd_active);
                         printf(COLOR"%s\n"RESET"\n", (char *) s[fd_active].buffer);
                         shutdown(fd_active, SHUT_RD);
-                        requestHandler(fd_active, s[fd_active].buffer);
+                        if (s[fd_active].bytes - 1 > 0) {
+                            requestHandler(fd_active, s[fd_active].buffer);
+                        } else {
+                            printf("Empty response\n");
+                        }
                         shutdown(fd_active, SHUT_WR);
                         FD_CLR(fd_active, &set);
                         if (fd_active == lfd) {
@@ -441,8 +477,22 @@ int main(int argc, char *argv[]) {
         }
     }
 
-    free(currentHostIp);
+    /* Inform server with a LOG_OFF message.*/
+    if ((fd_client = openConnection(inet_addr(serverIP), htons(serverPort))) > 0) {
+        send(fd_client, "LOG_OFF", 7, 0);
+        c = createClient(currentHostAddr.s_addr, htons(portNum));
+        send(fd_client, c, sizeof(struct client), 0);
+        free(c);
+        shutdown(fd_client, SHUT_WR);
+    }
+
+    //TODO: pthread_joins
+
+    free(currentHostStrIp);
     free(rcv_buffer);
     listDestroy(&list);
+
+    pthread_mutex_destroy(&mtx_client_list);
+    pthread_mutex_destroy(&mtx_pool);
     return 0;
 }
