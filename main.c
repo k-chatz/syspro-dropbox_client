@@ -180,7 +180,22 @@ void printClientTuple(Client c) {
     addr.sin_family = AF_INET;
     addr.sin_addr.s_addr = c->ip;
     addr.sin_port = c->port;
-    fprintf(stdout, COLOR"<%s, %d> "RESET, inet_ntoa(addr.sin_addr), ntohs(c->port));
+    fprintf(stdout, "<%s, %d> ", inet_ntoa(addr.sin_addr), ntohs(c->port));
+}
+
+int createSession(Session *s, int fd, fd_set *set, int *lfd) {
+    if (fd <= FD_SETSIZE) {
+        s[fd].buffer = malloc(1);
+        s[fd].bytes = 1;
+        s[fd].chunks = 0;
+        FD_SET(fd, set);
+        if (fd > *lfd) {
+            *lfd = fd;
+        }
+        return 1;
+    } else {
+        return 0;
+    }
 }
 
 /**
@@ -189,21 +204,38 @@ void requestHandler(int fd_client, void *buffer) {
     unsigned int clients = 0;
     Client c = NULL, client = NULL;
     int found = 0, offset = 0;
-
     if (strncmp(buffer, "GET_FILE_LIST", 13) == 0) {
         printf("REQUEST: GET_FILE_LIST\n");
         /*TODO: Get file version like this: printf("|%ld|", s.st_ctim.tv_nsec );*/
+
+
+
+
+
+
     } else if (strncmp(buffer, "GET_FILE", 8) == 0) {
         printf("REQUEST: GET_FILE\n");
 
+
     } else if (strncmp(buffer, "USER_ON", 7) == 0) {
         printf("REQUEST: USER_ON\n");
+        found = false;
         c = malloc(sizeof(struct client));
         memcpy(c, buffer + 7, sizeof(struct client));
-        if (listInsert(list, c)) {
-            printClientTuple(c);
+        listSetCurrentToStart(list);
+        while ((client = listNext(list)) != NULL) {
+            if (c->ip == client->ip && c->port == client->port) {
+                found = true;
+                break;
+            }
+        }
+        if (!found) {
+            if (listInsert(list, c)) {
+                printClientTuple(c);
+            }
         }
         printf("\n");
+        free(c);
     } else if (strncmp(buffer, "USER_OFF", 8) == 0) {
         printf("REQUEST: USER_OFF\n");
         c = malloc(sizeof(struct client));
@@ -258,21 +290,6 @@ void requestHandler(int fd_client, void *buffer) {
     } else {
         fprintf(stderr, "UNKNOWN_COMMAND\n");
         send(fd_client, "UNKNOWN_COMMAND", 15, 0);
-    }
-}
-
-int createSession(Session *s, int fd, fd_set *set, int *lfd) {
-    if (fd <= FD_SETSIZE) {
-        s[fd].buffer = malloc(1);
-        s[fd].bytes = 1;
-        s[fd].chunks = 0;
-        FD_SET(fd, set);
-        if (fd > *lfd) {
-            *lfd = fd;
-        }
-        return 1;
-    } else {
-        return 0;
     }
 }
 
