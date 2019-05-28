@@ -190,7 +190,28 @@ void requestHandler(int fd_client, void *buffer) {
 
     } else if (strncmp(buffer, "USER_OFF", 8) == 0) {
         printf("REQUEST: USER_OFF\n");
-
+        c = malloc(sizeof(struct client));
+        memcpy(c, buffer + 8, sizeof(struct client));
+        listSetCurrentToStart(list);
+        while ((client = listNext(list)) != NULL) {
+            if (c->ip == client->ip && c->port == client->port) {
+                found = true;
+                listSetCurrentToStart(list);
+                if (listRemove(list, client)) {
+                    send(fd_client, "USER_OFF_SUCCESS", 16, 0);
+                    fprintf(stdout, "USER_OFF_SUCCESS\n");
+                } else {
+                    send(fd_client, "ERROR_NOT_REMOVED", 17, 0);
+                    fprintf(stderr, "ERROR_NOT_REMOVED\n");
+                }
+                break;
+            }
+        }
+        if (!found) {
+            send(fd_client, "ERROR_IP_PORT_NOT_FOUND_IN_LIST", 31, 0);
+            fprintf(stderr, "ERROR_IP_PORT_NOT_FOUND_IN_LIST\n");
+        }
+        free(c);
     } else if (strncmp(buffer, "LOG_ON_SUCCESS", 14) == 0) {
         printf("RESPONSE: LOG_ON_SUCCESS\n");
 
