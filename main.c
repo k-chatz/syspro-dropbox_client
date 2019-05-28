@@ -156,7 +156,7 @@ int openConnection(in_addr_t ip, in_port_t port) {
     in_addr.sin_addr.s_addr = ip;
     in_addr.sin_port = port;
 
-    printf("Connecting socket %d to remote host %s:%d ...\n", fd, inet_ntoa(in_addr.sin_addr), ntohs(in_addr.sin_port));
+    printf("::Connecting socket %d to remote host %s:%d::\n", fd, inet_ntoa(in_addr.sin_addr), ntohs(in_addr.sin_port));
 
     /* Initiate connection */
     if (connect(fd, in_addr_ptr, sizeof(struct sockaddr)) < 0) {
@@ -218,24 +218,28 @@ void requestHandler(int fd_client, void *buffer) {
 
 
     } else if (strncmp(buffer, "USER_ON", 7) == 0) {
-        printf("REQUEST: USER_ON\n");
+        printf("REQUEST: USER_ON ");
         found = false;
         c = malloc(sizeof(struct client));
         memcpy(c, buffer + 7, sizeof(struct client));
+        printClientTuple(c);
+        printf("\n");
         listSetCurrentToStart(list);
         while ((client = listNext(list)) != NULL) {
             if (c->ip == client->ip && c->port == client->port) {
                 found = true;
+                fprintf(stderr, "Duplicate entry!\n");
                 break;
             }
         }
         if (!found) {
-            if (listInsert(list, c)) {
-                printClientTuple(c);
+            if (!listInsert(list, c)) {
+                fprintf(stderr, "Insert error!\n");
+                free(c);
             }
+        } else {
+            free(c);
         }
-        printf("\n");
-        free(c);
     } else if (strncmp(buffer, "USER_OFF", 8) == 0) {
         printf("REQUEST: USER_OFF\n");
         c = malloc(sizeof(struct client));
@@ -265,11 +269,11 @@ void requestHandler(int fd_client, void *buffer) {
     } else if (strncmp(buffer, "ALREADY_LOGGED_IN", 17) == 0) {
         printf("RESPONSE: ALREADY_LOGGED_IN\n");
     } else if (strncmp(buffer, "CLIENT_LIST", 11) == 0) {
-        printf("RESPONSE: CLIENT_LIST\n");
+        printf("RESPONSE: CLIENT_LIST ");
         offset = 11;
         memcpy(&clients, buffer + offset, sizeof(unsigned int));
         offset = offset + sizeof(unsigned int);
-        printf(COLOR"%d "RESET, clients);
+        printf("%d ", clients);
         for (int i = 0; i < clients; i++) {
             c = malloc(sizeof(struct client));
             memcpy(c, buffer + offset, sizeof(struct client));
@@ -285,6 +289,24 @@ void requestHandler(int fd_client, void *buffer) {
         printf("RESPONSE: ERROR_NOT_REMOVED\n");
     } else if (strncmp(buffer, "LOG_OFF_SUCCESS", 15) == 0) {
         printf("RESPONSE: LOG_OFF_SUCCESS\n");
+    } else if (strncmp(buffer, "GET_CLIENTS", 11) == 0) {
+        printf("REQUEST: GET_CLIENTS\n");
+        c = malloc(sizeof(struct client));
+        memcpy(c, buffer + 11, sizeof(struct client));
+        clients = listGetLength(list) - 1;
+        send(fd_client, "CLIENT_LIST", 11, 0);
+        fprintf(stdout, "CLIENT_LIST ");
+        send(fd_client, &clients, sizeof(unsigned int), 0);
+        fprintf(stdout, "%d ", clients);
+        listSetCurrentToStart(list);
+        while ((client = listNext(list)) != NULL) {
+            if (!(c->ip == client->ip && c->port == client->port)) {
+                send(fd_client, client, sizeof(struct client), 0);
+                printClientTuple(client);
+            }
+        }
+        fprintf(stdout, "\n");
+        free(c);
     } else if (strncmp(buffer, "UNKNOWN_COMMAND", 15) == 0) {
         printf("RESPONSE: UNKNOWN_COMMAND\n");
     } else {
@@ -335,7 +357,7 @@ int main(int argc, char *argv[]) {
     pthread_cond_init(&cond_nonempty, 0);
     pthread_cond_init(&cond_nonfull, 0);
 
-    timeout.tv_sec = 5;
+    timeout.tv_sec = 60;
     timeout.tv_nsec = 0;
 
     /* Initialize file descriptor sets.*/
@@ -453,7 +475,7 @@ int main(int argc, char *argv[]) {
 
     /****************************************************************************************************/
 
-    printf("Waiting for connections on %s:%d ... \n", currentHostStrIp, portNum);
+    printf("::Waiting for connections on %s:%d::\n", currentHostStrIp, portNum);
     while (!quit_request) {
         read_fds = set;
         activity = pselect(lfd + 1, &read_fds, NULL, NULL, &timeout, &oldset);
@@ -495,7 +517,7 @@ int main(int argc, char *argv[]) {
                         perror("accept");
                         break;
                     }
-                    printf("\n::Accept new client (%s:%d) on socket %d::\n", inet_ntoa(new_client_in_addr.sin_addr),
+                    printf("::Accept new client (%s:%d) on socket %d::\n", inet_ntoa(new_client_in_addr.sin_addr),
                            ntohs(new_client_in_addr.sin_port),
                            fd_new_client);
                     if (!createSession(s, fd_new_client, &set, &lfd)) {
@@ -510,7 +532,7 @@ int main(int argc, char *argv[]) {
                         printf("::%ld bytes were transferred into %d different chunks on socket %d::\n",
                                s[fd_active].bytes - 1,
                                s[fd_active].chunks, fd_active);
-                        printf(COLOR"%s"RESET"\n", (char *) s[fd_active].buffer);
+                        printf("::"COLOR"%s"RESET"::\n", (char *) s[fd_active].buffer);
                         shutdown(fd_active, SHUT_RD);
                         if (s[fd_active].bytes - 1 > 0) {
                             requestHandler(fd_active, s[fd_active].buffer);
