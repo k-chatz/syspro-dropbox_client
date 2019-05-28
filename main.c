@@ -206,16 +206,68 @@ void requestHandler(int fd_client, void *buffer) {
     int found = 0, offset = 0;
     if (strncmp(buffer, "GET_FILE_LIST", 13) == 0) {
         printf("REQUEST: GET_FILE_LIST\n");
-        /*TODO: Get file version like this: printf("|%ld|", s.st_ctim.tv_nsec );*/
+        found = false;
+        c = malloc(sizeof(struct client));
+        memcpy(c, buffer + 13, sizeof(struct client));
+        printClientTuple(c);
+        printf("\n");
+        listSetCurrentToStart(list);
+        while ((client = listNext(list)) != NULL) {
+            if (c->ip == client->ip && c->port == client->port) {
+                found = true;
+                break;
+            }
+        }
+        if (found) {
+            printf("Client exists!\n");
+            /*TODO: Get file version like this: printf("|%ld|", s.st_ctim.tv_nsec );*/
 
+            /*GET_FILE_LIST στέλνει στον πελάτη μια λίστα ονομάτων (pathnames) όλων των αρχείων που
+            βρίσκονται στο φάκελο ​dirName ​. Τα αρχεία μπορούν να είναι σε υποκαταλόγους κάτω από
+            το dirName. Το πρωτόκολλο για να επιστραφούν τα ονόματα θα είναι FILE_LIST n
+            <pathname1, version1> … <pathnameN,versionN> όπου n είναι ο αριθμός των ονομάτων
+            αρχείων που θα επιστραφούν. Θεωρούμε πως το pathname δεν μπορεί να περιέχει το
+            κόμμα.*/
 
-
-
-
-
+        } else {
+            free(c);
+            send(fd_client, "ERROR_IP_PORT_NOT_FOUND_IN_LIST", 31, 0);
+            fprintf(stderr, "ERROR_IP_PORT_NOT_FOUND_IN_LIST\n");
+        }
     } else if (strncmp(buffer, "GET_FILE", 8) == 0) {
         printf("REQUEST: GET_FILE\n");
+        found = false;
+        c = malloc(sizeof(struct client));
+        memcpy(c, buffer + 13, sizeof(struct client));
+        printClientTuple(c);
+        printf("\n");
+        listSetCurrentToStart(list);
+        while ((client = listNext(list)) != NULL) {
+            if (c->ip == client->ip && c->port == client->port) {
+                found = true;
+                break;
+            }
+        }
+        if (found) {
+            printf("Client exists!\n");
 
+            /*GET_FILE <pathname, version> Ελέγχει αν το αρχείο με όνομα ​dirName/​pathname υπάρχει (το
+            dirName έχει δοθεί ως παράμετρος στο πρόγραμμα). Αν δεν υπάρχει τότε στέλνεται το string
+            FILE_NOT_FOUND. Αν υπάρχει, ελέγχει αν έχει αλλάξει το αρχείο σε σχέση με την έκδοση
+            που ζητείται. Αν δεν ἐχει αλλάξει το αρχείο (δηλαδή η version αντιστοιχεί στην τελευταία
+            εκδοχή του αρχείου), τότε στέλνεται το string FILE_UP_TO_DATE στον πελάτη. Αν η τοπική
+            έκδοση διαφέρει από τη ζητούμενη, τότε θα πρέπει να επιστραφεί το αρχείο. Το τι θα περιέχει
+            η πληροφορία version είναι δική σας σχεδιαστική επιλογή: μπορεί να είναι π.χ., ένα hash,
+            ένα timestamp, η ένας αύξοντας αριθμός. Αν έχει αλλάξει το αρχείο, τότε επιστρέφεται το
+            string FILE_SIZE version n byte0byte1...byten, όπου version είναι η παρούσα έκδοση του
+            αρχείου, n είναι το μέγεθος του αρχείου σε bytes, και ακολούθως τα bytes του αρχείου.*/
+
+
+        } else {
+            free(c);
+            send(fd_client, "ERROR_IP_PORT_NOT_FOUND_IN_LIST", 31, 0);
+            fprintf(stderr, "ERROR_IP_PORT_NOT_FOUND_IN_LIST\n");
+        }
 
     } else if (strncmp(buffer, "USER_ON", 7) == 0) {
         printf("REQUEST: USER_ON ");
