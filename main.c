@@ -39,15 +39,14 @@ typedef struct {
     int count;
 } pool_t;
 
-pthread_mutex_t mtx_client_list, mtx_pool;
+static volatile int quit_request = 0;
+char *dirname = NULL, *serverIP = NULL;
 pthread_cond_t cond_nonempty;
 pthread_cond_t cond_nonfull;
+pthread_mutex_t mtx_client_list, mtx_pool;
+
 pool_t pool;
-
-static volatile int quit_request = 0;
-
 List list = NULL;
-char *dirname = NULL, *serverIP = NULL;
 int workerThreads = 0, bufferSize = 0;
 uint16_t portNum = 0, serverPort = 0;
 
@@ -180,7 +179,9 @@ Client createClient(in_addr_t addr, in_port_t port) {
  * Handle requests.*/
 void requestHandler(int fd_client, void *buffer) {
     unsigned int clients = 0;
-    Client c = NULL;
+    Client c = NULL, client = NULL;
+    int found = 0, offset = 0;
+    struct sockaddr_in addr;
 
     if (strncmp(buffer, "GET_FILE_LIST", 13) == 0) {
         printf("REQUEST: GET_FILE_LIST\n");
@@ -188,6 +189,15 @@ void requestHandler(int fd_client, void *buffer) {
     } else if (strncmp(buffer, "GET_FILE", 8) == 0) {
         printf("REQUEST: GET_FILE\n");
 
+    } else if (strncmp(buffer, "USER_ON", 7) == 0) {
+        printf("REQUEST: USER_ON\n");
+        c = malloc(sizeof(struct client));
+        memcpy(c, buffer + 7, sizeof(struct client));
+        if (listInsert(list, c)) {
+            fprintf(stdout, COLOR"<%s, %d>\n"RESET, inet_ntoa(addr.sin_addr), ntohs(c->port));
+        } else {
+            fprintf(stderr, "<%s, %d>\n", inet_ntoa(addr.sin_addr), ntohs(c->port));
+        }
     } else if (strncmp(buffer, "USER_OFF", 8) == 0) {
         printf("REQUEST: USER_OFF\n");
         c = malloc(sizeof(struct client));
@@ -220,25 +230,22 @@ void requestHandler(int fd_client, void *buffer) {
 
     } else if (strncmp(buffer, "CLIENT_LIST", 11) == 0) {
         printf("RESPONSE: CLIENT_LIST\n");
-
-        int offset = 11;
-
+        offset = 11;
         memcpy(&clients, buffer + offset, sizeof(unsigned int));
-
         offset = offset + sizeof(unsigned int);
-
         printf(COLOR"%d "RESET, clients);
-
         for (int i = 0; i < clients; i++) {
             c = malloc(sizeof(struct client));
             memcpy(c, buffer + offset, sizeof(struct client));
             offset = offset + sizeof(struct client);
-            listInsert(list, c);
-            struct sockaddr_in addr;
             addr.sin_family = AF_INET;
             addr.sin_addr.s_addr = c->ip;
             addr.sin_port = c->port;
-            printf(COLOR"<%s, %d> "RESET, inet_ntoa(addr.sin_addr), ntohs(c->port));
+            if (listInsert(list, c)) {
+                fprintf(stdout, COLOR"<%s, %d> "RESET, inet_ntoa(addr.sin_addr), ntohs(c->port));
+            } else {
+                fprintf(stderr, "<%s, %d> ", inet_ntoa(addr.sin_addr), ntohs(c->port));
+            }
         }
         printf("\n");
     } else if (strncmp(buffer, "ERROR_IP_PORT_NOT_FOUND_IN_LIST", 31) == 0) {
