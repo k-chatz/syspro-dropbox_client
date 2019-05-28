@@ -175,13 +175,20 @@ Client createClient(in_addr_t addr, in_port_t port) {
     return c;
 }
 
+void printClientTuple(Client c) {
+    struct sockaddr_in addr;
+    addr.sin_family = AF_INET;
+    addr.sin_addr.s_addr = c->ip;
+    addr.sin_port = c->port;
+    fprintf(stdout, COLOR"<%s, %d> "RESET, inet_ntoa(addr.sin_addr), ntohs(c->port));
+}
+
 /**
  * Handle requests.*/
 void requestHandler(int fd_client, void *buffer) {
     unsigned int clients = 0;
     Client c = NULL, client = NULL;
     int found = 0, offset = 0;
-    struct sockaddr_in addr;
 
     if (strncmp(buffer, "GET_FILE_LIST", 13) == 0) {
         printf("REQUEST: GET_FILE_LIST\n");
@@ -194,10 +201,9 @@ void requestHandler(int fd_client, void *buffer) {
         c = malloc(sizeof(struct client));
         memcpy(c, buffer + 7, sizeof(struct client));
         if (listInsert(list, c)) {
-            fprintf(stdout, COLOR"<%s, %d>\n"RESET, inet_ntoa(addr.sin_addr), ntohs(c->port));
-        } else {
-            fprintf(stderr, "<%s, %d>\n", inet_ntoa(addr.sin_addr), ntohs(c->port));
+            printClientTuple(c);
         }
+        printf("\n");
     } else if (strncmp(buffer, "USER_OFF", 8) == 0) {
         printf("REQUEST: USER_OFF\n");
         c = malloc(sizeof(struct client));
@@ -224,10 +230,8 @@ void requestHandler(int fd_client, void *buffer) {
         free(c);
     } else if (strncmp(buffer, "LOG_ON_SUCCESS", 14) == 0) {
         printf("RESPONSE: LOG_ON_SUCCESS\n");
-
     } else if (strncmp(buffer, "ALREADY_LOGGED_IN", 17) == 0) {
         printf("RESPONSE: ALREADY_LOGGED_IN\n");
-
     } else if (strncmp(buffer, "CLIENT_LIST", 11) == 0) {
         printf("RESPONSE: CLIENT_LIST\n");
         offset = 11;
@@ -238,31 +242,22 @@ void requestHandler(int fd_client, void *buffer) {
             c = malloc(sizeof(struct client));
             memcpy(c, buffer + offset, sizeof(struct client));
             offset = offset + sizeof(struct client);
-            addr.sin_family = AF_INET;
-            addr.sin_addr.s_addr = c->ip;
-            addr.sin_port = c->port;
             if (listInsert(list, c)) {
-                fprintf(stdout, COLOR"<%s, %d> "RESET, inet_ntoa(addr.sin_addr), ntohs(c->port));
-            } else {
-                fprintf(stderr, "<%s, %d> ", inet_ntoa(addr.sin_addr), ntohs(c->port));
+                printClientTuple(c);
             }
         }
         printf("\n");
     } else if (strncmp(buffer, "ERROR_IP_PORT_NOT_FOUND_IN_LIST", 31) == 0) {
         printf("RESPONSE: ERROR_IP_PORT_NOT_FOUND_IN_LIST\n");
-
     } else if (strncmp(buffer, "ERROR_NOT_REMOVED", 17) == 0) {
         printf("RESPONSE: ERROR_NOT_REMOVED\n");
-
     } else if (strncmp(buffer, "LOG_OFF_SUCCESS", 15) == 0) {
         printf("RESPONSE: LOG_OFF_SUCCESS\n");
-
     } else if (strncmp(buffer, "UNKNOWN_COMMAND", 15) == 0) {
         printf("RESPONSE: UNKNOWN_COMMAND\n");
-
     } else {
         fprintf(stderr, "UNKNOWN_COMMAND\n");
-        //send(fd_client, "UNKNOWN_COMMAND", 15, 0);
+        send(fd_client, "UNKNOWN_COMMAND", 15, 0);
     }
 }
 
@@ -498,7 +493,7 @@ int main(int argc, char *argv[]) {
                         printf("::%ld bytes were transferred into %d different chunks on socket %d::\n",
                                s[fd_active].bytes - 1,
                                s[fd_active].chunks, fd_active);
-                        printf(COLOR"%s\n"RESET"\n", (char *) s[fd_active].buffer);
+                        printf(COLOR"%s"RESET"\n", (char *) s[fd_active].buffer);
                         shutdown(fd_active, SHUT_RD);
                         if (s[fd_active].bytes - 1 > 0) {
                             requestHandler(fd_active, s[fd_active].buffer);
