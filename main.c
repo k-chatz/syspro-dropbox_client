@@ -25,15 +25,15 @@ typedef struct client {
     in_port_t port;
 } *Client;
 
-typedef struct rmf {
+typedef struct {
     in_addr_t ip;
     in_port_t port;
     char pathname[128];
     int version;
-} RemoteFile;
+} circular_buffer_t;
 
 typedef struct {
-    RemoteFile *data;
+    circular_buffer_t *buffer;
     int start;
     int end;
     int count;
@@ -47,11 +47,26 @@ pool_t pool;
 static volatile int quit_request = 0;
 
 List list = NULL;
+char *dirname = NULL, *serverIP = NULL;
+int workerThreads = 0, bufferSize = 0;
+uint16_t portNum = 0, serverPort = 0;
 
-void initialize(pool_t *pool) {
+void createCircularBuffer(pool_t *pool) {
+    int i;
+    pool->buffer = malloc(bufferSize * sizeof(circular_buffer_t));
+    for (i = 0; i < bufferSize; i++) {
+        pool->buffer[i].ip = 0;
+        pool->buffer[i].port = 0;
+        bzero(pool->buffer[i].pathname, 128);
+        pool->buffer[i].version = 0;
+    }
     pool->start = 0;
     pool->end = -1;
     pool->count = 0;
+}
+
+void destroyCircularBuffer(pool_t *pool) {
+    free(pool->buffer);
 }
 
 void wrongOptionValue(char *opt, char *val) {
@@ -223,6 +238,31 @@ void requestHandler(int fd_client, void *buffer) {
     }
 }
 
+int createSession(Session *s, int fd, fd_set *set, int *lfd) {
+    if (fd <= FD_SETSIZE) {
+        s[fd].buffer = malloc(1);
+        s[fd].bytes = 1;
+        s[fd].chunks = 0;
+        FD_SET(fd, set);
+        if (fd > *lfd) {
+            *lfd = fd;
+        }
+        return 1;
+    } else {
+        return 0;
+    }
+}
+
+void destroySession(Session *s, int fd, fd_set *set, int *lfd) {
+    FD_CLR(fd, set);
+    if (fd == *lfd) {
+        *lfd--;
+    }
+    close(fd);
+    free(s[fd].buffer);
+    s[fd].buffer = NULL;
+}
+
 int main(int argc, char *argv[]) {
     struct sockaddr *listen_in_addr_ptr = NULL, *new_client_in_addr_ptr = NULL, *client_in_addr_ptr = NULL;
     struct sockaddr *server_ptr = NULL, *client_ptr = NULL, *listen_ptr = NULL;
@@ -233,11 +273,11 @@ int main(int argc, char *argv[]) {
     struct hostent *hostEntry = NULL;
     struct timespec timeout;
     struct sigaction sa;
-    int opt = 1, lfd = 0, workerThreads = 0, bufferSize = 0, fd_listen = 0, fd_client = 0, fd_new_client = 0, activity = 0, fd_active = 0;
-    char *dirname = NULL, *serverIP = NULL, hostBuffer[256], *currentHostStrIp = NULL;
+    int opt = 1, lfd = 0, fd_listen = 0, fd_client = 0, fd_new_client = 0, activity = 0, fd_active = 0;
+    char hostBuffer[256], *currentHostStrIp = NULL;
     unsigned int clients = 0;
     void *rcv_buffer = NULL;
-    uint16_t portNum = 0, serverPort = 0;
+
     ssize_t bytes = 0;
     Session s[FD_SETSIZE];
     fd_set set, read_fds;
@@ -251,6 +291,9 @@ int main(int argc, char *argv[]) {
 
     pthread_mutex_init(&mtx_client_list, 0);
     pthread_mutex_init(&mtx_pool, 0);
+
+    pthread_cond_init(&cond_nonempty, 0);
+    pthread_cond_init(&cond_nonfull, 0);
 
     timeout.tv_sec = 5;
     timeout.tv_nsec = 0;
@@ -303,6 +346,10 @@ int main(int argc, char *argv[]) {
         exit(EXIT_FAILURE);
     }
 
+    if (fd_listen > lfd) {
+        lfd = fd_listen;
+    }
+
     FD_SET(fd_listen, &set);
 
     getsockopt(fd_listen, SOL_SOCKET, SO_RCVBUF, (void *) &socket_rcv_size, &st_rcv_len);
@@ -333,10 +380,6 @@ int main(int argc, char *argv[]) {
         exit(EXIT_FAILURE);
     }
 
-    if (fd_listen > lfd) {
-        lfd = fd_listen;
-    }
-
     for (int i = 0; i < FD_SETSIZE; i++) {
         s[i].buffer = NULL;
         s[i].bytes = 0;
@@ -345,15 +388,10 @@ int main(int argc, char *argv[]) {
 
     /* LOG_ON*/
     if ((fd_client = openConnection(inet_addr(serverIP), htons(serverPort))) > 0) {
-        s[fd_client].buffer = malloc(1);
-        s[fd_client].bytes = 1;
-        s[fd_client].chunks = 0;
-        FD_SET(fd_client, &set);
-        if (fd_client > lfd) {
-            lfd = fd_client;
+        if (!createSession(s, fd_client, &set, &lfd)) {
+            fprintf(stderr, "HOST_IS_TOO_BUSY");
         }
         send(fd_client, "LOG_ON", 6, 0);
-
         c = createClient(currentHostAddr.s_addr, htons(portNum));
         send(fd_client, c, sizeof(struct client), 0);
         free(c);
@@ -362,13 +400,7 @@ int main(int argc, char *argv[]) {
 
     /* GET_CLIENTS*/
     if ((fd_client = openConnection(inet_addr(serverIP), htons(serverPort))) > 0) {
-        s[fd_client].buffer = malloc(1);
-        s[fd_client].bytes = 1;
-        s[fd_client].chunks = 0;
-        FD_SET(fd_client, &set);
-        if (fd_client > lfd) {
-            lfd = fd_client;
-        }
+        createSession(s, fd_client, &set, &lfd);
         send(fd_client, "GET_CLIENTS", 11, 0);
         c = createClient(currentHostAddr.s_addr, htons(portNum));
         send(fd_client, c, sizeof(struct client), 0);
@@ -376,7 +408,8 @@ int main(int argc, char *argv[]) {
         shutdown(fd_client, SHUT_WR);
     }
 
-    //TODO: Create circular buffer
+    /* Create circular buffer.*/
+    createCircularBuffer(&pool);
 
     /****************************************************************************************************/
 
@@ -425,15 +458,8 @@ int main(int argc, char *argv[]) {
                     printf("\n::Accept new client (%s:%d) on socket %d::\n", inet_ntoa(new_client_in_addr.sin_addr),
                            ntohs(new_client_in_addr.sin_port),
                            fd_new_client);
-                    FD_SET(fd_new_client, &set);
-                    if (fd_new_client > lfd) {
-                        lfd = fd_new_client;
-                    }
-                    if (fd_new_client <= FD_SETSIZE) {
-                        s[fd_new_client].buffer = malloc(1);
-                        s[fd_new_client].bytes = 1;
-                        s[fd_new_client].chunks = 0;
-                    } else {
+                    if (!createSession(s, fd_new_client, &set, &lfd)) {
+                        fprintf(stderr, "HOST_IS_TOO_BUSY");
                         send(fd_new_client, "HOST_IS_TOO_BUSY", 16, 0);
                         close(fd_new_client);
                     }
@@ -452,13 +478,7 @@ int main(int argc, char *argv[]) {
                             printf("Empty response\n");
                         }
                         shutdown(fd_active, SHUT_WR);
-                        FD_CLR(fd_active, &set);
-                        if (fd_active == lfd) {
-                            lfd--;
-                        }
-                        close(fd_active);
-                        free(s[fd_active].buffer);
-                        s[fd_active].buffer = NULL;
+                        destroySession(s, fd_active, &set, &lfd);
                     } else if (bytes > 0) {
                         size_t offset = s[fd_active].chunks ? s[fd_active].bytes - 1 : 0;
                         s[fd_active].buffer = realloc(s[fd_active].buffer, s[fd_active].bytes + bytes - 1);
@@ -490,9 +510,15 @@ int main(int argc, char *argv[]) {
 
     free(currentHostStrIp);
     free(rcv_buffer);
+
     listDestroy(&list);
+
+    pthread_cond_destroy(&cond_nonempty);
+    pthread_cond_destroy(&cond_nonfull);
 
     pthread_mutex_destroy(&mtx_client_list);
     pthread_mutex_destroy(&mtx_pool);
+
+    destroyCircularBuffer(&pool);
     return 0;
 }
