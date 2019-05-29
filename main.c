@@ -9,6 +9,9 @@
 #include <signal.h>
 #include <errno.h>
 #include <pthread.h>
+#include <dirent.h>
+#include <sys/stat.h>
+#include <fcntl.h>
 #include "list.h"
 
 #define COLOR "\x1B[33m"
@@ -24,6 +27,11 @@ typedef struct client {
     in_addr_t ip;
     in_port_t port;
 } *Client;
+
+typedef struct file_t {
+    char pathname[128];
+    int version;
+} *file_t_ptr;
 
 typedef struct {
     in_addr_t ip;
@@ -46,9 +54,12 @@ pthread_cond_t cond_nonfull;
 pthread_mutex_t mtx_client_list, mtx_pool;
 
 pool_t pool;
-List list = NULL;
-int workerThreads = 0, bufferSize = 0;
+List client_list = NULL;
+Session s[FD_SETSIZE];
+fd_set set;
+int workerThreads = 0, bufferSize = 0, lfd = 0;
 uint16_t portNum = 0, serverPort = 0;
+struct in_addr currentHostAddr;
 
 void createCircularBuffer(pool_t *pool) {
     int i;
@@ -183,14 +194,18 @@ void printClientTuple(Client c) {
     fprintf(stdout, "<%s, %d> ", inet_ntoa(addr.sin_addr), ntohs(c->port));
 }
 
-int createSession(Session *s, int fd, fd_set *set, int *lfd) {
+void printFileTuple(file_t_ptr file) {
+    fprintf(stdout, "<%s, %d> ", file->pathname, file->version);
+}
+
+int createSession(int fd) {
     if (fd <= FD_SETSIZE) {
         s[fd].buffer = malloc(1);
         s[fd].bytes = 1;
         s[fd].chunks = 0;
-        FD_SET(fd, set);
-        if (fd > *lfd) {
-            *lfd = fd;
+        FD_SET(fd, &set);
+        if (fd > lfd) {
+            lfd = fd;
         }
         return 1;
     } else {
@@ -199,20 +214,85 @@ int createSession(Session *s, int fd, fd_set *set, int *lfd) {
 }
 
 /**
+ * Read directory & subdirectories recursively*/
+void rec_cp(List files, const char *_p, char *input_dir) {
+    char dirName[PATH_MAX], path[PATH_MAX], *fileName = NULL;
+    struct dirent *d = NULL;
+    struct stat s = {0};
+    DIR *dir = NULL;
+    file_t_ptr file = NULL;
+
+    if ((dir = opendir(_p))) {
+        while ((d = readdir(dir))) {
+
+            if (!strcmp(d->d_name, ".") || !strcmp(d->d_name, "..")) {
+                continue;
+            }
+
+            /* Construct real path.*/
+            if (sprintf(path, "%s/%s", _p, d->d_name) < 0) {
+                fprintf(stderr, "\n%s:%d-sprintf error\n", __FILE__, __LINE__);
+                exit(EXIT_FAILURE);
+            }
+
+            /* Get file statistics*/
+            if (!stat(path, &s)) {
+                fileName = path + strlen(input_dir) + 1;
+
+                if (S_ISDIR(s.st_mode)) {
+                    strcpy(dirName, fileName);
+                    strcat(dirName, "/\0");
+
+
+                    file = malloc(sizeof(struct file_t));
+                    strcpy(file->pathname, dirName);
+                    file->version = (int) s.st_ctim.tv_nsec;
+
+                    listInsert(files, file);
+
+                    /////////
+                    //puts(dirName);
+                    ////////
+
+                    rec_cp(files, path, input_dir);
+                } else if (S_ISREG(s.st_mode)) {
+
+                    /////////
+                    puts(fileName);
+                    file = malloc(sizeof(struct file_t));
+                    strcpy(file->pathname, fileName);
+                    file->version = (int) s.st_ctim.tv_nsec;
+
+                    listInsert(files, file);
+                    /////////
+
+                }
+            } else {
+                fprintf(stderr, "\n%s:%d-[%s] stat error: '%s'\n", __FILE__, __LINE__, path, strerror(errno));
+                exit(EXIT_FAILURE);
+            }
+        }
+        closedir(dir);
+    }
+}
+
+
+/**
  * Handle requests.*/
 void requestHandler(int fd_client, void *buffer) {
     unsigned int clients = 0;
     Client c = NULL, client = NULL;
     int found = 0, offset = 0;
+    List files = NULL;
     if (strncmp(buffer, "GET_FILE_LIST", 13) == 0) {
-        printf("REQUEST: GET_FILE_LIST\n");
+        printf("REQUEST: GET_FILE_LIST ");
         found = false;
         c = malloc(sizeof(struct client));
         memcpy(c, buffer + 13, sizeof(struct client));
         printClientTuple(c);
         printf("\n");
-        listSetCurrentToStart(list);
-        while ((client = listNext(list)) != NULL) {
+        listSetCurrentToStart(client_list);
+        while ((client = listNext(client_list)) != NULL) {
             if (c->ip == client->ip && c->port == client->port) {
                 found = true;
                 break;
@@ -220,14 +300,31 @@ void requestHandler(int fd_client, void *buffer) {
         }
         if (found) {
             printf("Client exists!\n");
-            /*TODO: Get file version like this: printf("|%ld|", s.st_ctim.tv_nsec );*/
 
-            /*GET_FILE_LIST στέλνει στον πελάτη μια λίστα ονομάτων (pathnames) όλων των αρχείων που
+
+            listCreate(&files);
+            rec_cp(files, dirname, dirname);
+            file_t_ptr file = NULL;
+
+            printf(COLOR"%d "RESET, listGetLength(files));
+
+
+            listSetCurrentToStart(files);
+            while ((file = listNext(files)) != NULL) {
+                printFileTuple(file);
+            }
+
+            /*
+             * GET_FILE_LIST στέλνει στον πελάτη μια λίστα ονομάτων (pathnames) όλων των αρχείων που
             βρίσκονται στο φάκελο ​dirName ​. Τα αρχεία μπορούν να είναι σε υποκαταλόγους κάτω από
             το dirName. Το πρωτόκολλο για να επιστραφούν τα ονόματα θα είναι FILE_LIST n
             <pathname1, version1> … <pathnameN,versionN> όπου n είναι ο αριθμός των ονομάτων
             αρχείων που θα επιστραφούν. Θεωρούμε πως το pathname δεν μπορεί να περιέχει το
-            κόμμα.*/
+            κόμμα.
+             */
+
+
+
 
         } else {
             free(c);
@@ -241,8 +338,8 @@ void requestHandler(int fd_client, void *buffer) {
         memcpy(c, buffer + 13, sizeof(struct client));
         printClientTuple(c);
         printf("\n");
-        listSetCurrentToStart(list);
-        while ((client = listNext(list)) != NULL) {
+        listSetCurrentToStart(client_list);
+        while ((client = listNext(client_list)) != NULL) {
             if (c->ip == client->ip && c->port == client->port) {
                 found = true;
                 break;
@@ -276,8 +373,8 @@ void requestHandler(int fd_client, void *buffer) {
         memcpy(c, buffer + 7, sizeof(struct client));
         printClientTuple(c);
         printf("\n");
-        listSetCurrentToStart(list);
-        while ((client = listNext(list)) != NULL) {
+        listSetCurrentToStart(client_list);
+        while ((client = listNext(client_list)) != NULL) {
             if (c->ip == client->ip && c->port == client->port) {
                 found = true;
                 fprintf(stderr, "Duplicate entry!\n");
@@ -285,9 +382,23 @@ void requestHandler(int fd_client, void *buffer) {
             }
         }
         if (!found) {
-            if (!listInsert(list, c)) {
+            if (!listInsert(client_list, c)) {
                 fprintf(stderr, "Insert error!\n");
                 free(c);
+            } else {
+
+                ////////////////////////////////////////////////////////////////////////////////////////////
+                /* GET_FILE_LIST*/
+                if ((fd_client = openConnection(c->ip, c->port)) > 0) {
+                    createSession(fd_client);
+                    send(fd_client, "GET_FILE_LIST", 13, 0);
+                    c = createClient(currentHostAddr.s_addr, htons(portNum));
+                    send(fd_client, c, sizeof(struct client), 0);
+                    free(c);
+                    shutdown(fd_client, SHUT_WR);
+                }
+                ////////////////////////////////////////////////////////////////////////////////////////////
+
             }
         } else {
             free(c);
@@ -296,12 +407,12 @@ void requestHandler(int fd_client, void *buffer) {
         printf("REQUEST: USER_OFF\n");
         c = malloc(sizeof(struct client));
         memcpy(c, buffer + 8, sizeof(struct client));
-        listSetCurrentToStart(list);
-        while ((client = listNext(list)) != NULL) {
+        listSetCurrentToStart(client_list);
+        while ((client = listNext(client_list)) != NULL) {
             if (c->ip == client->ip && c->port == client->port) {
                 found = true;
-                listSetCurrentToStart(list);
-                if (listRemove(list, client)) {
+                listSetCurrentToStart(client_list);
+                if (listRemove(client_list, client)) {
                     send(fd_client, "USER_OFF_SUCCESS", 16, 0);
                     fprintf(stdout, "USER_OFF_SUCCESS\n");
                 } else {
@@ -330,7 +441,7 @@ void requestHandler(int fd_client, void *buffer) {
             c = malloc(sizeof(struct client));
             memcpy(c, buffer + offset, sizeof(struct client));
             offset = offset + sizeof(struct client);
-            if (listInsert(list, c)) {
+            if (listInsert(client_list, c)) {
                 printClientTuple(c);
             }
         }
@@ -345,13 +456,13 @@ void requestHandler(int fd_client, void *buffer) {
         printf("REQUEST: GET_CLIENTS\n");
         c = malloc(sizeof(struct client));
         memcpy(c, buffer + 11, sizeof(struct client));
-        clients = listGetLength(list) - 1;
+        clients = listGetLength(client_list) - 1;
         send(fd_client, "CLIENT_LIST", 11, 0);
         fprintf(stdout, "CLIENT_LIST ");
         send(fd_client, &clients, sizeof(unsigned int), 0);
         fprintf(stdout, "%d ", clients);
-        listSetCurrentToStart(list);
-        while ((client = listNext(list)) != NULL) {
+        listSetCurrentToStart(client_list);
+        while ((client = listNext(client_list)) != NULL) {
             if (!(c->ip == client->ip && c->port == client->port)) {
                 send(fd_client, client, sizeof(struct client), 0);
                 printClientTuple(client);
@@ -367,10 +478,10 @@ void requestHandler(int fd_client, void *buffer) {
     }
 }
 
-void destroySession(Session *s, int fd, fd_set *set, int *lfd) {
-    FD_CLR(fd, set);
-    if (fd == *lfd) {
-        *lfd--;
+void destroySession(int fd) {
+    FD_CLR(fd, &set);
+    if (fd == lfd) {
+        lfd--;
     }
     close(fd);
     free(s[fd].buffer);
@@ -378,23 +489,19 @@ void destroySession(Session *s, int fd, fd_set *set, int *lfd) {
 }
 
 int main(int argc, char *argv[]) {
-    struct sockaddr *listen_in_addr_ptr = NULL, *new_client_in_addr_ptr = NULL, *client_in_addr_ptr = NULL;
+    struct sockaddr *new_client_in_addr_ptr = NULL;
     struct sockaddr *server_ptr = NULL, *client_ptr = NULL, *listen_ptr = NULL;
     struct sockaddr_in server_in_addr, client_in_addr, listen_in_addr;
     struct sockaddr_in new_client_in_addr;
-    struct in_addr currentHostAddr;
-
     struct hostent *hostEntry = NULL;
     struct timespec timeout;
     struct sigaction sa;
-    int opt = 1, lfd = 0, fd_listen = 0, fd_client = 0, fd_new_client = 0, activity = 0, fd_active = 0;
+    int opt = 1, fd_listen = 0, fd_client = 0, fd_new_client = 0, activity = 0, fd_active = 0;
     char hostBuffer[256], *currentHostStrIp = NULL;
-    unsigned int clients = 0;
     void *rcv_buffer = NULL;
 
     ssize_t bytes = 0;
-    Session s[FD_SETSIZE];
-    fd_set set, read_fds;
+    fd_set read_fds;
     size_t socket_rcv_size = 0, socket_snd_size = 0;
     socklen_t st_rcv_len = 0, st_snd_len = 0;
     socklen_t client_len = 0;
@@ -402,6 +509,7 @@ int main(int argc, char *argv[]) {
 
     /* Read argument options from command line*/
     readOptions(argc, argv, &dirname, &portNum, &workerThreads, &bufferSize, &serverPort, &serverIP);
+
 
     pthread_mutex_init(&mtx_client_list, 0);
     pthread_mutex_init(&mtx_pool, 0);
@@ -416,8 +524,8 @@ int main(int argc, char *argv[]) {
     FD_ZERO(&set);
     FD_ZERO(&read_fds);
 
-    /* Create clients list.*/
-    listCreate(&list);
+    /* Create clients client_list.*/
+    listCreate(&client_list);
 
     /* Setup signal handler for SIGINT signal.*/
     sa.sa_handler = hdl;
@@ -502,7 +610,7 @@ int main(int argc, char *argv[]) {
 
     /* LOG_ON*/
     if ((fd_client = openConnection(inet_addr(serverIP), htons(serverPort))) > 0) {
-        if (!createSession(s, fd_client, &set, &lfd)) {
+        if (!createSession(fd_client)) {
             fprintf(stderr, "HOST_IS_TOO_BUSY");
         }
         send(fd_client, "LOG_ON", 6, 0);
@@ -514,7 +622,7 @@ int main(int argc, char *argv[]) {
 
     /* GET_CLIENTS*/
     if ((fd_client = openConnection(inet_addr(serverIP), htons(serverPort))) > 0) {
-        createSession(s, fd_client, &set, &lfd);
+        createSession(fd_client);
         send(fd_client, "GET_CLIENTS", 11, 0);
         c = createClient(currentHostAddr.s_addr, htons(portNum));
         send(fd_client, c, sizeof(struct client), 0);
@@ -572,7 +680,7 @@ int main(int argc, char *argv[]) {
                     printf("::Accept new client (%s:%d) on socket %d::\n", inet_ntoa(new_client_in_addr.sin_addr),
                            ntohs(new_client_in_addr.sin_port),
                            fd_new_client);
-                    if (!createSession(s, fd_new_client, &set, &lfd)) {
+                    if (!createSession(fd_new_client)) {
                         fprintf(stderr, "HOST_IS_TOO_BUSY");
                         send(fd_new_client, "HOST_IS_TOO_BUSY", 16, 0);
                         close(fd_new_client);
@@ -592,7 +700,7 @@ int main(int argc, char *argv[]) {
                             printf("Empty response\n");
                         }
                         shutdown(fd_active, SHUT_WR);
-                        destroySession(s, fd_active, &set, &lfd);
+                        destroySession(fd_active);
                     } else if (bytes > 0) {
                         size_t offset = s[fd_active].chunks ? s[fd_active].bytes - 1 : 0;
                         s[fd_active].buffer = realloc(s[fd_active].buffer, s[fd_active].bytes + bytes - 1);
@@ -625,7 +733,7 @@ int main(int argc, char *argv[]) {
     free(currentHostStrIp);
     free(rcv_buffer);
 
-    listDestroy(&list);
+    listDestroy(&client_list);
 
     pthread_cond_destroy(&cond_nonempty);
     pthread_cond_destroy(&cond_nonfull);
