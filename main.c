@@ -742,21 +742,7 @@ int main(int argc, char *argv[]) {
     address.sin_addr.s_addr = inet_addr(serverIP);
     address.sin_port = htons(serverPort);
 
-
-    int skata = 0;
-    if ((skata = openConnection(address) > 0)) {
-        if (!createSession(skata, address)) {
-            fprintf(stderr, "HOST_IS_TOO_BUSY");
-        }
-        send(skata, "LOG_ON", 6, 0);
-        c = createClient(currentHostAddr.s_addr, htons(portNum));
-        send(skata, c, sizeof(struct client), 0);
-        free(c);
-        shutdown(skata, SHUT_WR);
-    }
-
-
-    if ((fd_client = openConnection(address) > 0)) {
+    if ((fd_client = openConnection(address)) > 0) {
         if (!createSession(fd_client, address)) {
             fprintf(stderr, "HOST_IS_TOO_BUSY");
         }
