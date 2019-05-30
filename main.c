@@ -335,18 +335,33 @@ void requestHandler(int fd_client, Session *session) {
                     send(fd_client, "FILE_UP_TO_DATE", 15, 0);
                     fprintf(stdout, "FILE_UP_TO_DATE");
                 } else {
+                    long int version = 0, bytes = 0;
+                    size_t fileNameLength = strlen(file->pathname);
+                    char *filename = NULL;
+
                     send(fd_client, "FILE", 4, 0);
-                    fprintf(stdout, "FILE ");
+                    fprintf(stdout, "\nFILE ");
 
-                    send(fd_client, file->pathname, strlen(file->pathname), 0);
+                    /* File name length*/
+                    send(fd_client, &fileNameLength, sizeof(size_t), 0);
+                    fprintf(stdout, "%ld ", fileNameLength);
 
+                    /* File name*/
+                    send(fd_client, file->pathname, sizeof(size_t), 0);
+                    fprintf(stdout, "%s ", file->pathname);
+
+                    /* File version*/
                     send(fd_client, &s.st_ctim.tv_nsec, sizeof(long int), 0);
                     fprintf(stdout, "%ld ", s.st_ctim.tv_nsec);
 
                     if (S_ISDIR(s.st_mode)) {
+
+                        /* Number of bytes*/
                         send(fd_client, 0, sizeof(long int), 0);
                         fprintf(stdout, "0 ");
                     } else if (S_ISREG(s.st_mode)) {
+
+                        /* Number of bytes*/
                         send(fd_client, &s.st_size, sizeof(long int), 0);
                         fprintf(stdout, "%ld ", s.st_size);
 
@@ -410,7 +425,8 @@ void requestHandler(int fd_client, Session *session) {
                 address.sin_port = c->port;
 
                 /* GET_FILE_LIST*/
-                if ((fd_client = openConnection(address) > 0)) {
+                fprintf(stdout, "GET_FILE_LIST\n");
+                if ((fd_client = openConnection(address)) > 0) {
                     createSession(fd_client, address);
                     send(fd_client, "GET_FILE_LIST", 13, 0);
                     Client c1 = createClient(currentHostAddr.s_addr, htons(portNum));
@@ -423,6 +439,7 @@ void requestHandler(int fd_client, Session *session) {
 
                 ////////////////////////////////////////////////////////////////////////////////////////////
                 /* GET_FILE*/
+                fprintf(stdout, "GET_FILE\n");
                 if ((fd_client = openConnection(address)) > 0) {
                     createSession(fd_client, address);
                     send(fd_client, "GET_FILE", 8, 0);
@@ -515,7 +532,7 @@ void requestHandler(int fd_client, Session *session) {
         fprintf(stdout, "RESPONSE: FILE ");
         long int version = 0, bytes = 0;
         size_t fileNameLength = 0;
-        char *filename = NULL;
+        char filename[PATH_MAX];
 
         offset = 4;
 
@@ -534,6 +551,7 @@ void requestHandler(int fd_client, Session *session) {
         offset += sizeof(long int);
         fprintf(stdout, "%ld ", version);
 
+        /* Number of bytes*/
         memcpy(&bytes, session->buffer + offset, sizeof(long int));
         offset += sizeof(long int);
         fprintf(stdout, "%ld ", bytes);
@@ -560,6 +578,7 @@ void requestHandler(int fd_client, Session *session) {
             pch = strchr(pch + 1, '/');
         }
 
+        //todo: check if is file or directory.
 
         if ((fd_file = open(path, O_CREAT | O_WRONLY | O_TRUNC, S_IRUSR | S_IWUSR | S_IXUSR)) < 0) {
             fprintf(stderr, "\n%s:%d-file '%s' open error: '%s'\n", __FILE__, __LINE__, path, strerror(errno));
@@ -735,13 +754,12 @@ int main(int argc, char *argv[]) {
         s[i].chunks = 0;
     }
 
-    /* LOG_ON*/
-
     struct sockaddr_in address;
     address.sin_family = AF_INET;
     address.sin_addr.s_addr = inet_addr(serverIP);
     address.sin_port = htons(serverPort);
 
+    /* LOG_ON*/
     if ((fd_client = openConnection(address)) > 0) {
         if (!createSession(fd_client, address)) {
             fprintf(stderr, "HOST_IS_TOO_BUSY");
@@ -755,7 +773,9 @@ int main(int argc, char *argv[]) {
 
     /* GET_CLIENTS*/
     if ((fd_client = openConnection(address)) > 0) {
-        createSession(fd_client, address);
+        if (!createSession(fd_client, address)) {
+            fprintf(stderr, "HOST_IS_TOO_BUSY");
+        }
         send(fd_client, "GET_CLIENTS", 11, 0);
         c = createClient(currentHostAddr.s_addr, htons(portNum));
         send(fd_client, c, sizeof(struct client), 0);
