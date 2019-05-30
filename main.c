@@ -347,7 +347,7 @@ void requestHandler(int fd_client, Session *session) {
                     fprintf(stdout, "%ld ", fileNameLength);
 
                     /* File name*/
-                    send(fd_client, file->pathname, sizeof(size_t), 0);
+                    send(fd_client, file->pathname, fileNameLength, 0);
                     fprintf(stdout, "%s ", file->pathname);
 
                     /* File version*/
@@ -447,7 +447,7 @@ void requestHandler(int fd_client, Session *session) {
                     send(fd_client, c1, sizeof(struct client), 0);
                     free(c1);
                     file = malloc(sizeof(struct file_t));
-                    strcpy(file->pathname, "TCP-socket-client-server-master/tcpechotimecli.c");
+                    strcpy(file->pathname, "README.md");
                     file->version = 232962259;
                     send(fd_client, file, sizeof(struct file_t), 0);
                     shutdown(fd_client, SHUT_WR);
@@ -530,7 +530,8 @@ void requestHandler(int fd_client, Session *session) {
         fprintf(stdout, "RESPONSE: FILE_UP_TO_DATE\n");
     } else if (strncmp(session->buffer, "FILE", 4) == 0) {
         fprintf(stdout, "RESPONSE: FILE ");
-        long int version = 0, bytes = 0;
+        long int version = 0;
+        size_t bytes = 0;
         size_t fileNameLength = 0;
         char filename[PATH_MAX];
 
@@ -538,12 +539,12 @@ void requestHandler(int fd_client, Session *session) {
 
         /* File name length*/
         memcpy(&fileNameLength, session->buffer + offset, sizeof(size_t));
-        offset += sizeof(long int);
+        offset += sizeof(size_t);
         fprintf(stdout, "%ld ", fileNameLength);
 
         /* File name*/
         memcpy(&filename, session->buffer + offset, fileNameLength);
-        offset += sizeof(long int);
+        offset += fileNameLength;
         fprintf(stdout, "%s ", filename);
 
         /* File version*/
@@ -556,49 +557,35 @@ void requestHandler(int fd_client, Session *session) {
         offset += sizeof(long int);
         fprintf(stdout, "%ld ", bytes);
 
-        if (sprintf(path, "%s/%s_%d/%s", dirname, inet_ntoa(session->address.sin_addr),
-                    ntohs(session->address.sin_port), filename) < 0) {
+        if (sprintf(path, "%s/%d%d/%s", dirname, session->address.sin_addr.s_addr,
+                    session->address.sin_port, filename) < 0) {
             fprintf(stderr, "\n%s:%d-sprintf error\n", __FILE__, __LINE__);
         }
-
         char *pch = NULL, ch;
-        unsigned long int off = 0;
+        unsigned long int i = 0;
+        ssize_t b = 0;
 
         /* Make dirs if not exists.*/
         pch = strchr(path, '/');
         while (pch != NULL) {
-            off = pch - path + 1;
-            ch = path[offset];
-            path[offset] = '\0';
+            i = pch - path + 1;
+            ch = path[i];
+            path[i] = '\0';
             printf("\nTry with: [%s]\n", path);
             if (stat(path, &s)) {
                 mkdir(path, S_IRUSR | S_IWUSR | S_IXUSR);
             }
-            path[offset] = ch;
+            path[i] = ch;
             pch = strchr(pch + 1, '/');
         }
-
-        //todo: check if is file or directory.
 
         if ((fd_file = open(path, O_CREAT | O_WRONLY | O_TRUNC, S_IRUSR | S_IWUSR | S_IXUSR)) < 0) {
             fprintf(stderr, "\n%s:%d-file '%s' open error: '%s'\n", __FILE__, __LINE__, path, strerror(errno));
         }
 
-/*        while (bytes > 0) {
-
-            if ((bytes = read(r_fd_fifo, buff, bytes > 1024 ? 1024 : b)) < 0) {
-                fprintf(stderr, "\n%s:%d-fifo read error: '%s'\n", __FILE__, __LINE__, strerror(errno));
-            }
-
-            r_bytes += bytes;
-            if (write(r_fd_file, buffer, (size_t) bytes) == -1) {
-                fprintf(stderr, "\n%s:%d-file write error: '%s'\n", __FILE__, __LINE__, strerror(errno));
-            }
-
-            b -= bytes;
-
-        };*/
-
+        if (write(fd_file, session->buffer + offset, bytes) == -1) {
+            fprintf(stderr, "\n%s:%d-file write error: '%s'\n", __FILE__, __LINE__, strerror(errno));
+        }
         fprintf(stdout, "\n");
     } else if (strncmp(session->buffer, "GET_CLIENTS", 11) == 0) {
         fprintf(stdout, "REQUEST: GET_CLIENTS\n");
@@ -663,7 +650,7 @@ int main(int argc, char *argv[]) {
     pthread_cond_init(&cond_nonempty, 0);
     pthread_cond_init(&cond_nonfull, 0);
 
-    timeout.tv_sec = 60;
+    timeout.tv_sec = 3600;
     timeout.tv_nsec = 0;
 
     /* Initialize file descriptor sets.*/
