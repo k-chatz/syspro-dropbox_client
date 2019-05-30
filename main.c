@@ -621,6 +621,60 @@ void destroySession(int fd) {
     s[fd].buffer = NULL;
 }
 
+void req_log_on() {
+    int fd = 0;
+    struct sockaddr_in address;
+    Client c = NULL;
+    address.sin_family = AF_INET;
+    address.sin_addr.s_addr = inet_addr(serverIP);
+    address.sin_port = htons(serverPort);
+    if ((fd = openConnection(address)) > 0) {
+        if (!createSession(fd, address)) {
+            fprintf(stderr, "HOST_IS_TOO_BUSY");
+        }
+        send(fd, "LOG_ON", 6, 0);
+        c = createClient(currentHostAddr.s_addr, htons(portNum));
+        send(fd, c, sizeof(struct client), 0);
+        free(c);
+        shutdown(fd, SHUT_WR);
+    }
+}
+
+void req_get_clients() {
+    int fd = 0;
+    struct sockaddr_in address;
+    Client c = NULL;
+    address.sin_family = AF_INET;
+    address.sin_addr.s_addr = inet_addr(serverIP);
+    address.sin_port = htons(serverPort);
+    if ((fd = openConnection(address)) > 0) {
+        if (!createSession(fd, address)) {
+            fprintf(stderr, "HOST_IS_TOO_BUSY");
+        }
+        send(fd, "GET_CLIENTS", 11, 0);
+        c = createClient(currentHostAddr.s_addr, htons(portNum));
+        send(fd, c, sizeof(struct client), 0);
+        free(c);
+        shutdown(fd, SHUT_WR);
+    }
+}
+
+void req_log_off() {
+    int fd = 0;
+    struct sockaddr_in address;
+    Client c = NULL;
+    address.sin_family = AF_INET;
+    address.sin_addr.s_addr = inet_addr(serverIP);
+    address.sin_port = htons(serverPort);
+    if ((fd = openConnection(address) > 0)) {
+        send(fd, "LOG_OFF", 7, 0);
+        c = createClient(currentHostAddr.s_addr, htons(portNum));
+        send(fd, c, sizeof(struct client), 0);
+        free(c);
+        shutdown(fd, SHUT_WR);
+    }
+}
+
 int main(int argc, char *argv[]) {
     struct sockaddr *new_client_in_addr_ptr = NULL;
     struct sockaddr *server_ptr = NULL, *client_ptr = NULL, *listen_ptr = NULL;
@@ -740,34 +794,9 @@ int main(int argc, char *argv[]) {
         s[i].chunks = 0;
     }
 
-    struct sockaddr_in address;
-    address.sin_family = AF_INET;
-    address.sin_addr.s_addr = inet_addr(serverIP);
-    address.sin_port = htons(serverPort);
+    req_log_on();
 
-    /* LOG_ON*/
-    if ((fd_client = openConnection(address)) > 0) {
-        if (!createSession(fd_client, address)) {
-            fprintf(stderr, "HOST_IS_TOO_BUSY");
-        }
-        send(fd_client, "LOG_ON", 6, 0);
-        c = createClient(currentHostAddr.s_addr, htons(portNum));
-        send(fd_client, c, sizeof(struct client), 0);
-        free(c);
-        shutdown(fd_client, SHUT_WR);
-    }
-
-    /* GET_CLIENTS*/
-    if ((fd_client = openConnection(address)) > 0) {
-        if (!createSession(fd_client, address)) {
-            fprintf(stderr, "HOST_IS_TOO_BUSY");
-        }
-        send(fd_client, "GET_CLIENTS", 11, 0);
-        c = createClient(currentHostAddr.s_addr, htons(portNum));
-        send(fd_client, c, sizeof(struct client), 0);
-        free(c);
-        shutdown(fd_client, SHUT_WR);
-    }
+    req_get_clients();
 
     /* Create circular buffer.*/
     createCircularBuffer(&pool);
@@ -778,7 +807,6 @@ int main(int argc, char *argv[]) {
     while (!quit_request) {
         read_fds = set;
         activity = pselect(lfd + 1, &read_fds, NULL, NULL, &timeout, &oldset);
-        //activity = select(lfd + 1, &read_fds, NULL, NULL, NULL);
         if (activity < 0 && (errno != EINTR)) {
             perror("select");
         } else if (activity == 0) {
@@ -863,13 +891,7 @@ int main(int argc, char *argv[]) {
     }
 
     /* Inform server with a LOG_OFF message.*/
-    if ((fd_client = openConnection(address) > 0)) {
-        send(fd_client, "LOG_OFF", 7, 0);
-        c = createClient(currentHostAddr.s_addr, htons(portNum));
-        send(fd_client, c, sizeof(struct client), 0);
-        free(c);
-        shutdown(fd_client, SHUT_WR);
-    }
+    req_log_off();
 
     //TODO: pthread_joins
 
