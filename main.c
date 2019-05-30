@@ -30,14 +30,14 @@ typedef struct client {
 
 typedef struct file_t {
     char pathname[128];
-    int version;
+    long int version;
 } *file_t_ptr;
 
 typedef struct {
     in_addr_t ip;
     in_port_t port;
     char pathname[128];
-    int version;
+    long int version;
 } circular_buffer_t;
 
 typedef struct {
@@ -196,7 +196,7 @@ void printClientTuple(Client c) {
 }
 
 void printFileTuple(file_t_ptr file) {
-    fprintf(stdout, "<%s, %d> ", file->pathname, file->version);
+    fprintf(stdout, "<%s, %ld> ", file->pathname, file->version);
 }
 
 int createSession(int fd) {
@@ -242,13 +242,13 @@ void rec_cp(List files, const char *_p, char *input_dir) {
                     strcat(dirName, "/\0");
                     file = malloc(sizeof(struct file_t));
                     strcpy(file->pathname, dirName);
-                    file->version = (int) s.st_ctim.tv_nsec;
+                    file->version = s.st_ctim.tv_nsec;
                     listInsert(files, file);
                     rec_cp(files, path, input_dir);
                 } else if (S_ISREG(s.st_mode)) {
                     file = malloc(sizeof(struct file_t));
                     strcpy(file->pathname, fileName);
-                    file->version = (int) s.st_ctim.tv_nsec;
+                    file->version = s.st_ctim.tv_nsec;
                     listInsert(files, file);
                 }
             } else {
@@ -265,9 +265,13 @@ void rec_cp(List files, const char *_p, char *input_dir) {
 void requestHandler(int fd_client, void *buffer) {
     unsigned int clients = 0, files = 0;
     Client c = NULL, client = NULL;
-    int found = 0, offset = 0;
+    int found = 0, offset = 0, fd_file = 0;
     List file_list = NULL;
     file_t_ptr file = NULL;
+    struct stat s = {0};
+    char path[PATH_MAX], buff[1024];
+    ssize_t n = 0;
+
     if (strncmp(buffer, "GET_FILE_LIST", 13) == 0) {
         fprintf(stdout, "REQUEST: GET_FILE_LIST ");
         found = false;
@@ -301,12 +305,14 @@ void requestHandler(int fd_client, void *buffer) {
             fprintf(stderr, "ERROR_IP_PORT_NOT_FOUND_IN_LIST\n");
         }
     } else if (strncmp(buffer, "GET_FILE", 8) == 0) {
-        fprintf(stdout, "REQUEST: GET_FILE\n");
+        fprintf(stdout, "REQUEST: GET_FILE ");
+        offset = 8;
         found = false;
         c = malloc(sizeof(struct client));
-        memcpy(c, buffer + 13, sizeof(struct client));
+        memcpy(c, buffer + offset, sizeof(struct client));
+        offset += sizeof(struct client);
         printClientTuple(c);
-        fprintf(stdout, "\n");
+        fprintf(stdout, " ");
         listSetCurrentToStart(client_list);
         while ((client = listNext(client_list)) != NULL) {
             if (c->ip == client->ip && c->port == client->port) {
@@ -315,37 +321,66 @@ void requestHandler(int fd_client, void *buffer) {
             }
         }
         if (found) {
-            fprintf(stdout, "Client exists!\n");
+            file = malloc(sizeof(struct file_t));
+            memcpy(file, buffer + offset, sizeof(struct file_t));
+            offset += sizeof(struct file_t);
+            printFileTuple(file);
 
-            /*GET_FILE <pathname, version>
+            /* Construct real path.*/
+            if (sprintf(path, "%s/%s", dirname, file->pathname) < 0) {
+                fprintf(stderr, "\n%s:%d-sprintf error\n", __FILE__, __LINE__);
+                exit(EXIT_FAILURE);
+            }
 
-            Ελέγχει αν το αρχείο με όνομα ​dirName/​pathname υπάρχει (το
-            dirName έχει δοθεί ως παράμετρος στο πρόγραμμα).
+            /* Get file statistics*/
+            if (!stat(path, &s)) {
+                if (file->version == s.st_ctim.tv_nsec) {
+                    send(fd_client, "FILE_UP_TO_DATE", 15, 0);
+                    fprintf(stdout, "FILE_UP_TO_DATE");
+                } else {
+                    send(fd_client, "FILE", 4, 0);
+                    fprintf(stdout, "FILE ");
 
-            Αν δεν υπάρχει τότε στέλνεται το string FILE_NOT_FOUND.
-            Αν υπάρχει, ελέγχει αν έχει αλλάξει το αρχείο σε σχέση με την έκδοση
-            που ζητείται.
+                    send(fd_client, &s.st_ctim.tv_nsec, sizeof(long int), 0);
+                    fprintf(stdout, "%ld ", s.st_ctim.tv_nsec);
 
-            Αν δεν ἐχει αλλάξει το αρχείο (δηλαδή η version αντιστοιχεί στην τελευταία
-            εκδοχή του αρχείου), τότε στέλνεται το string FILE_UP_TO_DATE στον πελάτη.
+                    if (S_ISDIR(s.st_mode)) {
+                        send(fd_client, 0, sizeof(long int), 0);
+                        fprintf(stdout, "0 ");
+                    } else if (S_ISREG(s.st_mode)) {
+                        send(fd_client, &s.st_size, sizeof(long int), 0);
+                        fprintf(stdout, "%ld ", s.st_size);
 
-            Αν η τοπική έκδοση διαφέρει από τη ζητούμενη, τότε θα πρέπει να επιστραφεί το αρχείο.
+                        /* Open file*/
+                        if ((fd_file = open(path, O_RDONLY)) < 0) {
+                            fprintf(stderr, "\n%s:%d-file %s open error: '%s'\n", __FILE__, __LINE__, path,
+                                    strerror(errno));
+                        }
 
-            Το τι θα περιέχει η πληροφορία version είναι δική σας σχεδιαστική επιλογή: μπορεί να είναι π.χ., ένα hash,
-            ένα timestamp, η ένας αύξοντας αριθμός.
-
-            Αν έχει αλλάξει το αρχείο, τότε επιστρέφεται το string
-             FILE_SIZE version n byte0byte1...byten, όπου version είναι η παρούσα έκδοση του
-            αρχείου, n είναι το μέγεθος του αρχείου σε bytes, και ακολούθως τα bytes του αρχείου.
-             */
-
-            send(fd_client, "FILE_NOT_FOUND", 14, 0);
+                        /* Send whole file byte-byte.*/
+                        if (s.st_size > 0) {
+                            do {
+                                if ((n = read(fd_file, buff, 1024)) > 0) {
+                                    fprintf(stdout, ".");
+                                    if (send(fd_client, buff, (size_t) n, 0) < 0) {
+                                        fprintf(stderr, "\n%s:%d-fifo write error: '%s'\n", __FILE__, __LINE__,
+                                                strerror(errno));
+                                    }
+                                }
+                            } while (n == 1024);
+                        }
+                        fprintf(stdout, "\n");
+                    }
+                }
+            } else {
+                send(fd_client, "FILE_NOT_FOUND", 14, 0);
+                fprintf(stderr, "\n%s:%d-[%s] stat error: '%s'\n", __FILE__, __LINE__, path, strerror(errno));
+            }
         } else {
             free(c);
             send(fd_client, "ERROR_IP_PORT_NOT_FOUND_IN_LIST", 31, 0);
             fprintf(stderr, "ERROR_IP_PORT_NOT_FOUND_IN_LIST\n");
         }
-
     } else if (strncmp(buffer, "USER_ON", 7) == 0) {
         fprintf(stdout, "REQUEST: USER_ON ");
         found = false;
@@ -372,9 +407,26 @@ void requestHandler(int fd_client, void *buffer) {
                 if ((fd_client = openConnection(c->ip, c->port)) > 0) {
                     createSession(fd_client);
                     send(fd_client, "GET_FILE_LIST", 13, 0);
-                    c = createClient(currentHostAddr.s_addr, htons(portNum));
-                    send(fd_client, c, sizeof(struct client), 0);
-                    free(c);
+                    Client c1 = createClient(currentHostAddr.s_addr, htons(portNum));
+                    send(fd_client, c1, sizeof(struct client), 0);
+                    free(c1);
+                    shutdown(fd_client, SHUT_WR);
+                }
+                ////////////////////////////////////////////////////////////////////////////////////////////
+
+
+                ////////////////////////////////////////////////////////////////////////////////////////////
+                /* GET_FILE*/
+                if ((fd_client = openConnection(c->ip, c->port)) > 0) {
+                    createSession(fd_client);
+                    send(fd_client, "GET_FILE", 8, 0);
+                    Client c1 = createClient(currentHostAddr.s_addr, htons(portNum));
+                    send(fd_client, c1, sizeof(struct client), 0);
+                    free(c1);
+                    file = malloc(sizeof(struct file_t));
+                    strcpy(file->pathname, "TCP-socket-client-server-master/tcpechotimecli.c");
+                    file->version = 232962259;
+                    send(fd_client, file, sizeof(struct file_t), 0);
                     shutdown(fd_client, SHUT_WR);
                 }
                 ////////////////////////////////////////////////////////////////////////////////////////////
@@ -418,7 +470,7 @@ void requestHandler(int fd_client, void *buffer) {
             memcpy(file, buffer + offset, sizeof(struct file_t));
             offset = offset + sizeof(struct file_t);
             printFileTuple(file);
-            //TODO: Insert into circular buffer!
+            //TODO: Insert into circular buffer, Mutex!!!
         }
         fprintf(stdout, "\n");
     } else if (strncmp(buffer, "LOG_ON_SUCCESS", 14) == 0) {
@@ -446,6 +498,48 @@ void requestHandler(int fd_client, void *buffer) {
         fprintf(stdout, "RESPONSE: ERROR_NOT_REMOVED\n");
     } else if (strncmp(buffer, "LOG_OFF_SUCCESS", 15) == 0) {
         fprintf(stdout, "RESPONSE: LOG_OFF_SUCCESS\n");
+    } else if (strncmp(buffer, "FILE_NOT_FOUND", 14) == 0) {
+        fprintf(stdout, "RESPONSE: FILE_NOT_FOUND\n");
+    } else if (strncmp(buffer, "FILE_UP_TO_DATE", 15) == 0) {
+        fprintf(stdout, "RESPONSE: FILE_UP_TO_DATE\n");
+    } else if (strncmp(buffer, "FILE", 4) == 0) {
+        fprintf(stdout, "RESPONSE: FILE ");
+        offset = 4;
+
+        // name of file ??
+
+        long int version = 0, bytes = 0;
+        memcpy(&version, buffer + offset, sizeof(long int));
+        fprintf(stdout, "%ld ", version);
+        offset += sizeof(long int);
+
+        memcpy(&bytes, buffer + offset, sizeof(long int));
+        fprintf(stdout, "%ld ", bytes);
+
+        offset += sizeof(long int);
+
+        /* Open file*/
+        if ((fd_file = open(path, O_RDONLY)) < 0) {
+            fprintf(stderr, "\n%s:%d-file %s open error: '%s'\n", __FILE__, __LINE__, path,
+                    strerror(errno));
+        }
+
+/*        while (bytes > 0) {
+
+            if ((bytes = read(r_fd_fifo, buff, bytes > 1024 ? 1024 : b)) < 0) {
+                fprintf(stderr, "\n%s:%d-fifo read error: '%s'\n", __FILE__, __LINE__, strerror(errno));
+            }
+
+            r_bytes += bytes;
+            if (write(r_fd_file, buffer, (size_t) bytes) == -1) {
+                fprintf(stderr, "\n%s:%d-file write error: '%s'\n", __FILE__, __LINE__, strerror(errno));
+            }
+
+            b -= bytes;
+
+        };*/
+
+        fprintf(stdout, "\n");
     } else if (strncmp(buffer, "GET_CLIENTS", 11) == 0) {
         fprintf(stdout, "REQUEST: GET_CLIENTS\n");
         c = malloc(sizeof(struct client));
@@ -468,7 +562,6 @@ void requestHandler(int fd_client, void *buffer) {
         fprintf(stdout, "RESPONSE: UNKNOWN_COMMAND\n");
     } else {
         fprintf(stderr, "UNKNOWN_COMMAND\n");
-        send(fd_client, "UNKNOWN_COMMAND", 15, 0);
     }
 }
 
@@ -503,7 +596,6 @@ int main(int argc, char *argv[]) {
 
     /* Read argument options from command line*/
     readOptions(argc, argv, &dirname, &portNum, &workerThreads, &bufferSize, &serverPort, &serverIP);
-
 
     pthread_mutex_init(&mtx_client_list, 0);
     pthread_mutex_init(&mtx_pool, 0);
@@ -687,12 +779,11 @@ int main(int argc, char *argv[]) {
                         fprintf(stdout, "::%ld bytes were transferred into %d different chunks on socket %d::\n",
                                 s[fd_active].bytes - 1,
                                 s[fd_active].chunks, fd_active);
-                        fprintf(stdout, "::"COLOR"%s"RESET"::\n", (char *) s[fd_active].buffer);
+                        fprintf(stdout, "::"COLOR" %s "RESET"::\n",
+                                (s[fd_active].bytes - 1 > 0) ? (char *) s[fd_active].buffer : "(Empty response body)");
                         shutdown(fd_active, SHUT_RD);
                         if (s[fd_active].bytes - 1 > 0) {
                             requestHandler(fd_active, s[fd_active].buffer);
-                        } else {
-                            fprintf(stdout, "Empty response\n");
                         }
                         shutdown(fd_active, SHUT_WR);
                         destroySession(fd_active);
