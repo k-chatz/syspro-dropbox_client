@@ -447,7 +447,7 @@ void requestHandler(int fd_client, Session *session) {
                     send(fd_client, c1, sizeof(struct client), 0);
                     free(c1);
                     file = malloc(sizeof(struct file_t));
-                    strcpy(file->pathname, "README.md");
+                    strcpy(file->pathname, "jobExecutor/main.c");
                     file->version = 232962259;
                     send(fd_client, file, sizeof(struct file_t), 0);
                     shutdown(fd_client, SHUT_WR);
@@ -545,6 +545,7 @@ void requestHandler(int fd_client, Session *session) {
         /* File name*/
         memcpy(&filename, session->buffer + offset, fileNameLength);
         offset += fileNameLength;
+        filename[fileNameLength] = '\0';
         fprintf(stdout, "%s ", filename);
 
         /* File version*/
@@ -563,7 +564,6 @@ void requestHandler(int fd_client, Session *session) {
         }
         char *pch = NULL, ch;
         unsigned long int i = 0;
-        ssize_t b = 0;
 
         /* Make dirs if not exists.*/
         pch = strchr(path, '/');
@@ -571,7 +571,6 @@ void requestHandler(int fd_client, Session *session) {
             i = pch - path + 1;
             ch = path[i];
             path[i] = '\0';
-            printf("\nTry with: [%s]\n", path);
             if (stat(path, &s)) {
                 mkdir(path, S_IRUSR | S_IWUSR | S_IXUSR);
             }
@@ -813,7 +812,6 @@ int main(int argc, char *argv[]) {
         for (fd_active = 0; fd_active <= lfd; fd_active++) {
             if (FD_ISSET(fd_active, &read_fds)) {
                 if (fd_active == fd_listen) {
-
 
                     if ((fd_new_client = accept(fd_active, new_client_in_addr_ptr, &client_len)) < 0) {
                         perror("accept");
