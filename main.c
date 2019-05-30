@@ -747,8 +747,8 @@ void handler(int fd_client, Session *session) {
 }
 
 int main(int argc, char *argv[]) {
-    struct sockaddr *new_client_in_addr_ptr = NULL;
-    struct sockaddr_in new_client_in_addr;
+    struct sockaddr *new_client_ptr = NULL;
+    struct sockaddr_in new_client;
 
     struct sockaddr *listen_ptr = NULL;
     struct sockaddr_in listen_in_addr;
@@ -759,7 +759,6 @@ int main(int argc, char *argv[]) {
     int opt = 1, fd_listen = 0, fd_new_client = 0, activity = 0, fd_active = 0;
     char hostBuffer[256], *currentHostStrIp = NULL;
     void *rcv_buffer = NULL;
-
     ssize_t bytes = 0;
     fd_set read_fds;
     size_t socket_rcv_size = 0, socket_snd_size = 0;
@@ -807,11 +806,11 @@ int main(int argc, char *argv[]) {
     st_snd_len = sizeof(socket_snd_size);
     client_len = sizeof(struct sockaddr);
 
-
     listen_ptr = (struct sockaddr *) &listen_in_addr;
-
+    new_client_ptr = (struct sockaddr *) &new_client;
 
     memset(listen_ptr, 0, sizeof(struct sockaddr));
+    memset(new_client_ptr, 0, sizeof(struct sockaddr));
 
     /* Setup listening address*/
     listen_in_addr.sin_family = AF_INET;
@@ -909,22 +908,20 @@ int main(int argc, char *argv[]) {
             if (FD_ISSET(fd_active, &read_fds)) {
                 if (fd_active == fd_listen) {
 
-                    if ((fd_new_client = accept(fd_active, new_client_in_addr_ptr, &client_len)) < 0) {
+                    if ((fd_new_client = accept(fd_active, new_client_ptr, &client_len)) < 0) {
                         perror("accept");
                         break;
                     }
-
                     fprintf(stdout, "::Accept new client (%s:%d) on socket %d::\n",
-                            inet_ntoa(new_client_in_addr.sin_addr),
-                            ntohs(new_client_in_addr.sin_port),
+                            inet_ntoa(new_client.sin_addr),
+                            ntohs(new_client.sin_port),
                             fd_new_client);
 
-                    if (!createSession(fd_new_client, new_client_in_addr)) {
+                    if (!createSession(fd_new_client, new_client)) {
                         fprintf(stderr, "HOST_IS_TOO_BUSY");
                         send(fd_new_client, "HOST_IS_TOO_BUSY", 16, 0);
                         close(fd_new_client);
                     }
-
                 } else {
                     bzero(rcv_buffer, socket_rcv_size);
                     bytes = recv(fd_active, rcv_buffer, socket_rcv_size, 0);
