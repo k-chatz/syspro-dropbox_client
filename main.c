@@ -21,6 +21,7 @@ typedef struct session {
     size_t bytes;
     void *buffer;
     int chunks;
+    struct sockaddr_in address;
 } Session;
 
 typedef struct client {
@@ -149,13 +150,10 @@ static void hdl(int sig) {
 
 /**
  * Open TCP connection.*/
-int openConnection(in_addr_t ip, in_port_t port) {
-    struct sockaddr_in in_addr;
-    struct sockaddr *in_addr_ptr = NULL;
+int openConnection(struct sockaddr_in address) {
     int fd = 0;
-
-    in_addr_ptr = (struct sockaddr *) &in_addr;
-    memset(in_addr_ptr, 0, sizeof(struct sockaddr));
+    struct sockaddr *in_addr_ptr = NULL;
+    in_addr_ptr = (struct sockaddr *) &address;
 
     /* Create socket */
     if ((fd = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP)) < 0) {
@@ -163,20 +161,18 @@ int openConnection(in_addr_t ip, in_port_t port) {
         return 0;
     }
 
-    in_addr.sin_family = AF_INET;
-    in_addr.sin_addr.s_addr = ip;
-    in_addr.sin_port = port;
-
-    fprintf(stdout, "::Connecting socket %d to remote host %s:%d::\n", fd, inet_ntoa(in_addr.sin_addr),
-            ntohs(in_addr.sin_port));
+    fprintf(stdout, "::Connecting socket %d to remote host %s:%d::\n", fd, inet_ntoa(address.sin_addr),
+            ntohs(address.sin_port));
 
     /* Initiate connection */
     if (connect(fd, in_addr_ptr, sizeof(struct sockaddr)) < 0) {
         perror("connect");
         return 0;
     }
-    fprintf(stdout, "::Connection to remote host %s:%d established::\n", inet_ntoa(in_addr.sin_addr),
-            ntohs(in_addr.sin_port));
+
+    fprintf(stdout, "::Connection to remote host %s:%d established::\n", inet_ntoa(address.sin_addr),
+            ntohs(address.sin_port));
+
     return fd;
 }
 
@@ -199,11 +195,12 @@ void printFileTuple(file_t_ptr file) {
     fprintf(stdout, "<%s, %ld> ", file->pathname, file->version);
 }
 
-int createSession(int fd) {
+int createSession(int fd, struct sockaddr_in address) {
     if (fd <= FD_SETSIZE) {
         s[fd].buffer = malloc(1);
         s[fd].bytes = 1;
         s[fd].chunks = 0;
+        s[fd].address = address;
         FD_SET(fd, &set);
         if (fd > lfd) {
             lfd = fd;
@@ -216,7 +213,7 @@ int createSession(int fd) {
 
 /**
  * Read directory & subdirectories recursively*/
-void rec_cp(List files, const char *_p, char *input_dir) {
+void rec_readdir(List files, const char *_p, char *input_dir) {
     char dirName[PATH_MAX], path[PATH_MAX], *fileName = NULL;
     struct dirent *d = NULL;
     struct stat s = {0};
@@ -244,7 +241,7 @@ void rec_cp(List files, const char *_p, char *input_dir) {
                     strcpy(file->pathname, dirName);
                     file->version = s.st_ctim.tv_nsec;
                     listInsert(files, file);
-                    rec_cp(files, path, input_dir);
+                    rec_readdir(files, path, input_dir);
                 } else if (S_ISREG(s.st_mode)) {
                     file = malloc(sizeof(struct file_t));
                     strcpy(file->pathname, fileName);
@@ -262,7 +259,7 @@ void rec_cp(List files, const char *_p, char *input_dir) {
 
 /**
  * Handle requests.*/
-void requestHandler(int fd_client, void *buffer) {
+void requestHandler(int fd_client, Session *session) {
     unsigned int clients = 0, files = 0;
     Client c = NULL, client = NULL;
     int found = 0, offset = 0, fd_file = 0;
@@ -272,11 +269,11 @@ void requestHandler(int fd_client, void *buffer) {
     char path[PATH_MAX], buff[1024];
     ssize_t n = 0;
 
-    if (strncmp(buffer, "GET_FILE_LIST", 13) == 0) {
+    if (strncmp(session->buffer, "GET_FILE_LIST", 13) == 0) {
         fprintf(stdout, "REQUEST: GET_FILE_LIST ");
         found = false;
         c = malloc(sizeof(struct client));
-        memcpy(c, buffer + 13, sizeof(struct client));
+        memcpy(c, session->buffer + 13, sizeof(struct client));
         printClientTuple(c);
         fprintf(stdout, "\n");
         listSetCurrentToStart(client_list);
@@ -288,7 +285,7 @@ void requestHandler(int fd_client, void *buffer) {
         }
         if (found) {
             listCreate(&file_list);
-            rec_cp(file_list, dirname, dirname);
+            rec_readdir(file_list, dirname, dirname);
             files = listGetLength(file_list);
             send(fd_client, "FILE_LIST", 9, 0);
             send(fd_client, &files, sizeof(unsigned int), 0);
@@ -304,12 +301,12 @@ void requestHandler(int fd_client, void *buffer) {
             send(fd_client, "ERROR_IP_PORT_NOT_FOUND_IN_LIST", 31, 0);
             fprintf(stderr, "ERROR_IP_PORT_NOT_FOUND_IN_LIST\n");
         }
-    } else if (strncmp(buffer, "GET_FILE", 8) == 0) {
+    } else if (strncmp(session->buffer, "GET_FILE", 8) == 0) {
         fprintf(stdout, "REQUEST: GET_FILE ");
         offset = 8;
         found = false;
         c = malloc(sizeof(struct client));
-        memcpy(c, buffer + offset, sizeof(struct client));
+        memcpy(c, session->buffer + offset, sizeof(struct client));
         offset += sizeof(struct client);
         printClientTuple(c);
         fprintf(stdout, " ");
@@ -322,7 +319,7 @@ void requestHandler(int fd_client, void *buffer) {
         }
         if (found) {
             file = malloc(sizeof(struct file_t));
-            memcpy(file, buffer + offset, sizeof(struct file_t));
+            memcpy(file, session->buffer + offset, sizeof(struct file_t));
             offset += sizeof(struct file_t);
             printFileTuple(file);
 
@@ -340,6 +337,8 @@ void requestHandler(int fd_client, void *buffer) {
                 } else {
                     send(fd_client, "FILE", 4, 0);
                     fprintf(stdout, "FILE ");
+
+                    send(fd_client, file->pathname, strlen(file->pathname), 0);
 
                     send(fd_client, &s.st_ctim.tv_nsec, sizeof(long int), 0);
                     fprintf(stdout, "%ld ", s.st_ctim.tv_nsec);
@@ -376,16 +375,17 @@ void requestHandler(int fd_client, void *buffer) {
                 send(fd_client, "FILE_NOT_FOUND", 14, 0);
                 fprintf(stderr, "\n%s:%d-[%s] stat error: '%s'\n", __FILE__, __LINE__, path, strerror(errno));
             }
+            free(file);
         } else {
             free(c);
             send(fd_client, "ERROR_IP_PORT_NOT_FOUND_IN_LIST", 31, 0);
             fprintf(stderr, "ERROR_IP_PORT_NOT_FOUND_IN_LIST\n");
         }
-    } else if (strncmp(buffer, "USER_ON", 7) == 0) {
+    } else if (strncmp(session->buffer, "USER_ON", 7) == 0) {
         fprintf(stdout, "REQUEST: USER_ON ");
         found = false;
         c = malloc(sizeof(struct client));
-        memcpy(c, buffer + 7, sizeof(struct client));
+        memcpy(c, session->buffer + 7, sizeof(struct client));
         printClientTuple(c);
         fprintf(stdout, "\n");
         listSetCurrentToStart(client_list);
@@ -403,9 +403,15 @@ void requestHandler(int fd_client, void *buffer) {
             } else {
 
                 ////////////////////////////////////////////////////////////////////////////////////////////
+
+                struct sockaddr_in address;
+                address.sin_family = AF_INET;
+                address.sin_addr.s_addr = c->ip;
+                address.sin_port = c->port;
+
                 /* GET_FILE_LIST*/
-                if ((fd_client = openConnection(c->ip, c->port)) > 0) {
-                    createSession(fd_client);
+                if ((fd_client = openConnection(address) > 0)) {
+                    createSession(fd_client, address);
                     send(fd_client, "GET_FILE_LIST", 13, 0);
                     Client c1 = createClient(currentHostAddr.s_addr, htons(portNum));
                     send(fd_client, c1, sizeof(struct client), 0);
@@ -417,8 +423,8 @@ void requestHandler(int fd_client, void *buffer) {
 
                 ////////////////////////////////////////////////////////////////////////////////////////////
                 /* GET_FILE*/
-                if ((fd_client = openConnection(c->ip, c->port)) > 0) {
-                    createSession(fd_client);
+                if ((fd_client = openConnection(address)) > 0) {
+                    createSession(fd_client, address);
                     send(fd_client, "GET_FILE", 8, 0);
                     Client c1 = createClient(currentHostAddr.s_addr, htons(portNum));
                     send(fd_client, c1, sizeof(struct client), 0);
@@ -435,10 +441,10 @@ void requestHandler(int fd_client, void *buffer) {
         } else {
             free(c);
         }
-    } else if (strncmp(buffer, "USER_OFF", 8) == 0) {
+    } else if (strncmp(session->buffer, "USER_OFF", 8) == 0) {
         fprintf(stdout, "REQUEST: USER_OFF\n");
         c = malloc(sizeof(struct client));
-        memcpy(c, buffer + 8, sizeof(struct client));
+        memcpy(c, session->buffer + 8, sizeof(struct client));
         listSetCurrentToStart(client_list);
         while ((client = listNext(client_list)) != NULL) {
             if (c->ip == client->ip && c->port == client->port) {
@@ -459,69 +465,104 @@ void requestHandler(int fd_client, void *buffer) {
             fprintf(stderr, "ERROR_IP_PORT_NOT_FOUND_IN_LIST\n");
         }
         free(c);
-    } else if (strncmp(buffer, "FILE_LIST", 9) == 0) {
+    } else if (strncmp(session->buffer, "FILE_LIST", 9) == 0) {
         fprintf(stdout, "RESPONSE: FILE_LIST ");
         offset = 9;
-        memcpy(&files, buffer + offset, sizeof(unsigned int));
+        memcpy(&files, session->buffer + offset, sizeof(unsigned int));
         offset = offset + sizeof(unsigned int);
         fprintf(stdout, "%d ", files);
         for (int i = 0; i < files; i++) {
             file = malloc(sizeof(struct file_t));
-            memcpy(file, buffer + offset, sizeof(struct file_t));
+            memcpy(file, session->buffer + offset, sizeof(struct file_t));
             offset = offset + sizeof(struct file_t);
             printFileTuple(file);
             //TODO: Insert into circular buffer, Mutex!!!
         }
         fprintf(stdout, "\n");
-    } else if (strncmp(buffer, "LOG_ON_SUCCESS", 14) == 0) {
+    } else if (strncmp(session->buffer, "LOG_ON_SUCCESS", 14) == 0) {
         fprintf(stdout, "RESPONSE: LOG_ON_SUCCESS\n");
-    } else if (strncmp(buffer, "ALREADY_LOGGED_IN", 17) == 0) {
+    } else if (strncmp(session->buffer, "ALREADY_LOGGED_IN", 17) == 0) {
         fprintf(stdout, "RESPONSE: ALREADY_LOGGED_IN\n");
-    } else if (strncmp(buffer, "CLIENT_LIST", 11) == 0) {
+    } else if (strncmp(session->buffer, "CLIENT_LIST", 11) == 0) {
+        int i;
         fprintf(stdout, "RESPONSE: CLIENT_LIST ");
         offset = 11;
-        memcpy(&clients, buffer + offset, sizeof(unsigned int));
+        memcpy(&clients, session->buffer + offset, sizeof(unsigned int));
         offset = offset + sizeof(unsigned int);
         fprintf(stdout, "%d ", clients);
-        for (int i = 0; i < clients; i++) {
-            c = malloc(sizeof(struct client));
-            memcpy(c, buffer + offset, sizeof(struct client));
-            offset = offset + sizeof(struct client);
-            if (listInsert(client_list, c)) {
-                printClientTuple(c);
+        if (clients > 0) {
+            for (i = 0; i < clients; i++) {
+                c = malloc(sizeof(struct client));
+                memcpy(c, session->buffer + offset, sizeof(struct client));
+                offset = offset + sizeof(struct client);
+                if (listInsert(client_list, c)) {
+                    printClientTuple(c);
+                }
             }
         }
         fprintf(stdout, "\n");
-    } else if (strncmp(buffer, "ERROR_IP_PORT_NOT_FOUND_IN_LIST", 31) == 0) {
+    } else if (strncmp(session->buffer, "ERROR_IP_PORT_NOT_FOUND_IN_LIST", 31) == 0) {
         fprintf(stdout, "RESPONSE: ERROR_IP_PORT_NOT_FOUND_IN_LIST\n");
-    } else if (strncmp(buffer, "ERROR_NOT_REMOVED", 17) == 0) {
+    } else if (strncmp(session->buffer, "ERROR_NOT_REMOVED", 17) == 0) {
         fprintf(stdout, "RESPONSE: ERROR_NOT_REMOVED\n");
-    } else if (strncmp(buffer, "LOG_OFF_SUCCESS", 15) == 0) {
+    } else if (strncmp(session->buffer, "LOG_OFF_SUCCESS", 15) == 0) {
         fprintf(stdout, "RESPONSE: LOG_OFF_SUCCESS\n");
-    } else if (strncmp(buffer, "FILE_NOT_FOUND", 14) == 0) {
+    } else if (strncmp(session->buffer, "FILE_NOT_FOUND", 14) == 0) {
         fprintf(stdout, "RESPONSE: FILE_NOT_FOUND\n");
-    } else if (strncmp(buffer, "FILE_UP_TO_DATE", 15) == 0) {
+    } else if (strncmp(session->buffer, "FILE_UP_TO_DATE", 15) == 0) {
         fprintf(stdout, "RESPONSE: FILE_UP_TO_DATE\n");
-    } else if (strncmp(buffer, "FILE", 4) == 0) {
+    } else if (strncmp(session->buffer, "FILE", 4) == 0) {
         fprintf(stdout, "RESPONSE: FILE ");
+        long int version = 0, bytes = 0;
+        size_t fileNameLength = 0;
+        char *filename = NULL;
+
         offset = 4;
 
-        // name of file ??
-
-        long int version = 0, bytes = 0;
-        memcpy(&version, buffer + offset, sizeof(long int));
-        fprintf(stdout, "%ld ", version);
+        /* File name length*/
+        memcpy(&fileNameLength, session->buffer + offset, sizeof(size_t));
         offset += sizeof(long int);
+        fprintf(stdout, "%ld ", fileNameLength);
 
-        memcpy(&bytes, buffer + offset, sizeof(long int));
+        /* File name*/
+        memcpy(&filename, session->buffer + offset, fileNameLength);
+        offset += sizeof(long int);
+        fprintf(stdout, "%s ", filename);
+
+        /* File version*/
+        memcpy(&version, session->buffer + offset, sizeof(long int));
+        offset += sizeof(long int);
+        fprintf(stdout, "%ld ", version);
+
+        memcpy(&bytes, session->buffer + offset, sizeof(long int));
+        offset += sizeof(long int);
         fprintf(stdout, "%ld ", bytes);
 
-        offset += sizeof(long int);
+        if (sprintf(path, "%s/%s_%d/%s", dirname, inet_ntoa(session->address.sin_addr),
+                    ntohs(session->address.sin_port), filename) < 0) {
+            fprintf(stderr, "\n%s:%d-sprintf error\n", __FILE__, __LINE__);
+        }
 
-        /* Open file*/
-        if ((fd_file = open(path, O_RDONLY)) < 0) {
-            fprintf(stderr, "\n%s:%d-file %s open error: '%s'\n", __FILE__, __LINE__, path,
-                    strerror(errno));
+        char *pch = NULL, ch;
+        unsigned long int off = 0;
+
+        /* Make dirs if not exists.*/
+        pch = strchr(path, '/');
+        while (pch != NULL) {
+            off = pch - path + 1;
+            ch = path[offset];
+            path[offset] = '\0';
+            printf("\nTry with: [%s]\n", path);
+            if (stat(path, &s)) {
+                mkdir(path, S_IRUSR | S_IWUSR | S_IXUSR);
+            }
+            path[offset] = ch;
+            pch = strchr(pch + 1, '/');
+        }
+
+
+        if ((fd_file = open(path, O_CREAT | O_WRONLY | O_TRUNC, S_IRUSR | S_IWUSR | S_IXUSR)) < 0) {
+            fprintf(stderr, "\n%s:%d-file '%s' open error: '%s'\n", __FILE__, __LINE__, path, strerror(errno));
         }
 
 /*        while (bytes > 0) {
@@ -540,10 +581,10 @@ void requestHandler(int fd_client, void *buffer) {
         };*/
 
         fprintf(stdout, "\n");
-    } else if (strncmp(buffer, "GET_CLIENTS", 11) == 0) {
+    } else if (strncmp(session->buffer, "GET_CLIENTS", 11) == 0) {
         fprintf(stdout, "REQUEST: GET_CLIENTS\n");
         c = malloc(sizeof(struct client));
-        memcpy(c, buffer + 11, sizeof(struct client));
+        memcpy(c, session->buffer + 11, sizeof(struct client));
         clients = listGetLength(client_list) - 1;
         send(fd_client, "CLIENT_LIST", 11, 0);
         fprintf(stdout, "CLIENT_LIST ");
@@ -558,7 +599,7 @@ void requestHandler(int fd_client, void *buffer) {
         }
         fprintf(stdout, "\n");
         free(c);
-    } else if (strncmp(buffer, "UNKNOWN_COMMAND", 15) == 0) {
+    } else if (strncmp(session->buffer, "UNKNOWN_COMMAND", 15) == 0) {
         fprintf(stdout, "RESPONSE: UNKNOWN_COMMAND\n");
     } else {
         fprintf(stderr, "UNKNOWN_COMMAND\n");
@@ -695,8 +736,28 @@ int main(int argc, char *argv[]) {
     }
 
     /* LOG_ON*/
-    if ((fd_client = openConnection(inet_addr(serverIP), htons(serverPort))) > 0) {
-        if (!createSession(fd_client)) {
+
+    struct sockaddr_in address;
+    address.sin_family = AF_INET;
+    address.sin_addr.s_addr = inet_addr(serverIP);
+    address.sin_port = htons(serverPort);
+
+
+    int skata = 0;
+    if ((skata = openConnection(address) > 0)) {
+        if (!createSession(skata, address)) {
+            fprintf(stderr, "HOST_IS_TOO_BUSY");
+        }
+        send(skata, "LOG_ON", 6, 0);
+        c = createClient(currentHostAddr.s_addr, htons(portNum));
+        send(skata, c, sizeof(struct client), 0);
+        free(c);
+        shutdown(skata, SHUT_WR);
+    }
+
+
+    if ((fd_client = openConnection(address) > 0)) {
+        if (!createSession(fd_client, address)) {
             fprintf(stderr, "HOST_IS_TOO_BUSY");
         }
         send(fd_client, "LOG_ON", 6, 0);
@@ -707,8 +768,8 @@ int main(int argc, char *argv[]) {
     }
 
     /* GET_CLIENTS*/
-    if ((fd_client = openConnection(inet_addr(serverIP), htons(serverPort))) > 0) {
-        createSession(fd_client);
+    if ((fd_client = openConnection(address)) > 0) {
+        createSession(fd_client, address);
         send(fd_client, "GET_CLIENTS", 11, 0);
         c = createClient(currentHostAddr.s_addr, htons(portNum));
         send(fd_client, c, sizeof(struct client), 0);
@@ -759,19 +820,24 @@ int main(int argc, char *argv[]) {
         for (fd_active = 0; fd_active <= lfd; fd_active++) {
             if (FD_ISSET(fd_active, &read_fds)) {
                 if (fd_active == fd_listen) {
+
+
                     if ((fd_new_client = accept(fd_active, new_client_in_addr_ptr, &client_len)) < 0) {
                         perror("accept");
                         break;
                     }
+
                     fprintf(stdout, "::Accept new client (%s:%d) on socket %d::\n",
                             inet_ntoa(new_client_in_addr.sin_addr),
                             ntohs(new_client_in_addr.sin_port),
                             fd_new_client);
-                    if (!createSession(fd_new_client)) {
+
+                    if (!createSession(fd_new_client, new_client_in_addr)) {
                         fprintf(stderr, "HOST_IS_TOO_BUSY");
                         send(fd_new_client, "HOST_IS_TOO_BUSY", 16, 0);
                         close(fd_new_client);
                     }
+
                 } else {
                     bzero(rcv_buffer, socket_rcv_size);
                     bytes = recv(fd_active, rcv_buffer, socket_rcv_size, 0);
@@ -783,7 +849,7 @@ int main(int argc, char *argv[]) {
                                 (s[fd_active].bytes - 1 > 0) ? (char *) s[fd_active].buffer : "(Empty response body)");
                         shutdown(fd_active, SHUT_RD);
                         if (s[fd_active].bytes - 1 > 0) {
-                            requestHandler(fd_active, s[fd_active].buffer);
+                            requestHandler(fd_active, &s[fd_active]);
                         }
                         shutdown(fd_active, SHUT_WR);
                         destroySession(fd_active);
@@ -806,7 +872,7 @@ int main(int argc, char *argv[]) {
     }
 
     /* Inform server with a LOG_OFF message.*/
-    if ((fd_client = openConnection(inet_addr(serverIP), htons(serverPort))) > 0) {
+    if ((fd_client = openConnection(address) > 0)) {
         send(fd_client, "LOG_OFF", 7, 0);
         c = createClient(currentHostAddr.s_addr, htons(portNum));
         send(fd_client, c, sizeof(struct client), 0);
