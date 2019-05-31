@@ -702,47 +702,47 @@ void handle_req_get_clients(int fd_client, Session *session) {
  * Handle requests & responses.*/
 void handler(int fd_client, Session *session) {
     if (strncmp(session->buffer, "GET_FILE_LIST", 13) == 0) {
-        fprintf(stdout, "REQUEST: GET_FILE_LIST ");
+        fprintf(stdout, "\n\nREQUEST: GET_FILE_LIST ");
         handle_req_get_file_list(fd_client, session);
     } else if (strncmp(session->buffer, "GET_FILE", 8) == 0) {
-        fprintf(stdout, "REQUEST: GET_FILE ");
+        fprintf(stdout, "\n\nREQUEST: GET_FILE ");
         handle_req_get_file(fd_client, session);
     } else if (strncmp(session->buffer, "USER_ON", 7) == 0) {
-        fprintf(stdout, "REQUEST: USER_ON ");
+        fprintf(stdout, "\n\nREQUEST: USER_ON ");
         handle_req_user_on(fd_client, session);
     } else if (strncmp(session->buffer, "USER_OFF", 8) == 0) {
-        fprintf(stdout, "REQUEST: USER_OFF\n");
+        fprintf(stdout, "\n\nREQUEST: USER_OFF\n");
         handle_req_user_off(fd_client, session);
     } else if (strncmp(session->buffer, "FILE_LIST", 9) == 0) {
-        fprintf(stdout, "RESPONSE: FILE_LIST ");
+        fprintf(stdout, "\n\nRESPONSE: FILE_LIST ");
         handle_res_get_file_list(fd_client, session);
     } else if (strncmp(session->buffer, "LOG_ON_SUCCESS", 14) == 0) {
-        fprintf(stdout, "RESPONSE: LOG_ON_SUCCESS\n");
+        fprintf(stdout, "\n\nRESPONSE: LOG_ON_SUCCESS\n");
     } else if (strncmp(session->buffer, "ALREADY_LOGGED_IN", 17) == 0) {
-        fprintf(stdout, "RESPONSE: ALREADY_LOGGED_IN\n");
+        fprintf(stdout, "\n\nRESPONSE: ALREADY_LOGGED_IN\n");
     } else if (strncmp(session->buffer, "CLIENT_LIST", 11) == 0) {
-        fprintf(stdout, "RESPONSE: CLIENT_LIST ");
+        fprintf(stdout, "\n\nRESPONSE: CLIENT_LIST ");
         handle_res_get_clients(fd_client, session);
     } else if (strncmp(session->buffer, "ERROR_IP_PORT_NOT_FOUND_IN_LIST", 31) == 0) {
-        fprintf(stdout, "RESPONSE: ERROR_IP_PORT_NOT_FOUND_IN_LIST\n");
+        fprintf(stdout, "\n\nRESPONSE: ERROR_IP_PORT_NOT_FOUND_IN_LIST\n");
     } else if (strncmp(session->buffer, "ERROR_NOT_REMOVED", 17) == 0) {
-        fprintf(stdout, "RESPONSE: ERROR_NOT_REMOVED\n");
+        fprintf(stdout, "\n\nRESPONSE: ERROR_NOT_REMOVED\n");
     } else if (strncmp(session->buffer, "LOG_OFF_SUCCESS", 15) == 0) {
-        fprintf(stdout, "RESPONSE: LOG_OFF_SUCCESS\n");
+        fprintf(stdout, "\n\nRESPONSE: LOG_OFF_SUCCESS\n");
     } else if (strncmp(session->buffer, "FILE_NOT_FOUND", 14) == 0) {
-        fprintf(stdout, "RESPONSE: FILE_NOT_FOUND\n");
+        fprintf(stdout, "\n\nRESPONSE: FILE_NOT_FOUND\n");
     } else if (strncmp(session->buffer, "FILE_UP_TO_DATE", 15) == 0) {
-        fprintf(stdout, "RESPONSE: FILE_UP_TO_DATE\n");
+        fprintf(stdout, "\n\nRESPONSE: FILE_UP_TO_DATE\n");
     } else if (strncmp(session->buffer, "FILE", 4) == 0) {
-        fprintf(stdout, "RESPONSE: FILE ");
+        fprintf(stdout, "\n\nRESPONSE: FILE ");
         handle_res_get_file(fd_client, session);
     } else if (strncmp(session->buffer, "GET_CLIENTS", 11) == 0) {
-        fprintf(stdout, "REQUEST: GET_CLIENTS\n");
+        fprintf(stdout, "\n\nREQUEST: GET_CLIENTS\n");
         handle_req_get_clients(fd_client, session);
     } else if (strncmp(session->buffer, "UNKNOWN_COMMAND", 15) == 0) {
-        fprintf(stdout, "RESPONSE: UNKNOWN_COMMAND\n");
+        fprintf(stdout, "\n\nRESPONSE: UNKNOWN_COMMAND\n");
     } else {
-        fprintf(stderr, "UNKNOWN_COMMAND\n");
+        fprintf(stderr, "\n\nUNKNOWN_COMMAND\n");
     }
 }
 
