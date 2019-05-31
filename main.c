@@ -571,6 +571,27 @@ void handle_req_user_off(int fd_client, Session *session) {
     free(c);
 }
 
+void handle_req_get_clients(int fd_client, Session *session) {
+    unsigned int clients = 0;
+    Client c = NULL, client = NULL;
+    c = malloc(sizeof(struct client));
+    memcpy(c, session->buffer + 11, sizeof(struct client));
+    clients = listGetLength(client_list) - 1;
+    send(fd_client, "CLIENT_LIST", 11, 0);
+    fprintf(stdout, "CLIENT_LIST ");
+    send(fd_client, &clients, sizeof(unsigned int), 0);
+    fprintf(stdout, "%d ", clients);
+    listSetCurrentToStart(client_list);
+    while ((client = listNext(client_list)) != NULL) {
+        if (!(c->ip == client->ip && c->port == client->port)) {
+            send(fd_client, client, sizeof(struct client), 0);
+            printClientTuple(client);
+        }
+    }
+    fprintf(stdout, "\n");
+    free(c);
+}
+
 void handle_res_get_file_list(int fd_client, Session *session) {
     unsigned int files = 0;
     int offset = 9;
@@ -609,22 +630,30 @@ void handle_res_get_clients(int fd_client, Session *session) {
     fprintf(stdout, "\n");
 }
 
-void handle_res_get_file(int fd_client, Session *session) {
-    unsigned int clients = 0, files = 0;
-    Client c = NULL, client = NULL;
-    int found = 0, offset = 0, fd_file = 0;
-    List file_list = NULL;
-    file_t_ptr file = NULL;
+void mkdirs(char *path) {
     struct stat s = {0};
-    char path[PATH_MAX], buff[1024];
-    ssize_t n = 0;
+    char *pch = NULL, ch;
+    unsigned long int i = 0;
+    pch = strchr(path, '/');
+    while (pch != NULL) {
+        i = pch - path + 1;
+        ch = path[i];
+        path[i] = '\0';
+        if (stat(path, &s)) {
+            mkdir(path, S_IRUSR | S_IWUSR | S_IXUSR);
+        }
+        path[i] = ch;
+        pch = strchr(pch + 1, '/');
+    }
+}
 
+void handle_res_get_file(int fd_client, Session *session) {
+    int offset = 4, fd_file = 0;
+    char path[PATH_MAX];
+    char filename[PATH_MAX];
     long int version = 0;
     size_t bytes = 0;
     size_t fileNameLength = 0;
-    char filename[PATH_MAX];
-
-    offset = 4;
 
     /* File name length*/
     memcpy(&fileNameLength, session->buffer + offset, sizeof(size_t));
@@ -651,51 +680,23 @@ void handle_res_get_file(int fd_client, Session *session) {
                 session->address.sin_port, filename) < 0) {
         fprintf(stderr, "\n%s:%d-sprintf error\n", __FILE__, __LINE__);
     }
-    char *pch = NULL, ch;
-    unsigned long int i = 0;
 
     /* Make dirs if not exists.*/
-    pch = strchr(path, '/');
-    while (pch != NULL) {
-        i = pch - path + 1;
-        ch = path[i];
-        path[i] = '\0';
-        if (stat(path, &s)) {
-            mkdir(path, S_IRUSR | S_IWUSR | S_IXUSR);
+    mkdirs(path);
+
+    //todo: if is file
+    if (1) {
+        /* Open file for write*/
+        if ((fd_file = open(path, O_CREAT | O_WRONLY | O_TRUNC, S_IRUSR | S_IWUSR | S_IXUSR)) < 0) {
+            fprintf(stderr, "\n%s:%d-file '%s' open error: '%s'\n", __FILE__, __LINE__, path, strerror(errno));
         }
-        path[i] = ch;
-        pch = strchr(pch + 1, '/');
-    }
 
-    if ((fd_file = open(path, O_CREAT | O_WRONLY | O_TRUNC, S_IRUSR | S_IWUSR | S_IXUSR)) < 0) {
-        fprintf(stderr, "\n%s:%d-file '%s' open error: '%s'\n", __FILE__, __LINE__, path, strerror(errno));
-    }
-
-    if (write(fd_file, session->buffer + offset, bytes) == -1) {
-        fprintf(stderr, "\n%s:%d-file write error: '%s'\n", __FILE__, __LINE__, strerror(errno));
-    }
-    fprintf(stdout, "\n");
-}
-
-void handle_req_get_clients(int fd_client, Session *session) {
-    unsigned int clients = 0;
-    Client c = NULL, client = NULL;
-    c = malloc(sizeof(struct client));
-    memcpy(c, session->buffer + 11, sizeof(struct client));
-    clients = listGetLength(client_list) - 1;
-    send(fd_client, "CLIENT_LIST", 11, 0);
-    fprintf(stdout, "CLIENT_LIST ");
-    send(fd_client, &clients, sizeof(unsigned int), 0);
-    fprintf(stdout, "%d ", clients);
-    listSetCurrentToStart(client_list);
-    while ((client = listNext(client_list)) != NULL) {
-        if (!(c->ip == client->ip && c->port == client->port)) {
-            send(fd_client, client, sizeof(struct client), 0);
-            printClientTuple(client);
+        if (write(fd_file, session->buffer + offset, bytes) == -1) {
+            fprintf(stderr, "\n%s:%d-file write error: '%s'\n", __FILE__, __LINE__, strerror(errno));
         }
     }
+
     fprintf(stdout, "\n");
-    free(c);
 }
 
 /**
@@ -746,6 +747,43 @@ void handler(int fd_client, Session *session) {
     }
 }
 
+void place(pool_t *pool, int data) {
+    pthread_mutex_lock(&mtx_pool); // LOCK
+    while (pool->count >= bufferSize) {
+        printf(">> Found Buffer Full \n");
+        pthread_cond_wait(&cond_nonfull, &mtx_pool);
+    }
+    pool->end = (pool->end + 1) % bufferSize;
+    //pool->data[pool->end] = data;
+    pool->count++;
+    pthread_mutex_unlock(&mtx_pool); // UNLOCK
+}
+
+int obtain(pool_t *pool) {
+    int data = 0;
+    pthread_mutex_lock(&mtx_pool);
+    while (pool->count <= 0) {
+        printf(">> Found Buffer Empty \n");
+        pthread_cond_wait(&cond_nonempty, &mtx_pool);
+    }
+    //data = pool->data[pool->start];
+
+    //TODO CALL THE RIGHT FUNCTIONS
+
+    pool->start = (pool->start + 1) % bufferSize;
+    pool->count--;
+    pthread_mutex_unlock(&mtx_pool);
+    return data;
+}
+
+void *worker(void *ptr) {
+    while (pool.count > 0) {
+        printf("C[%s]: %d\n", (char *) ptr, obtain(&pool));
+        pthread_cond_signal(&cond_nonfull);
+        usleep(500000);
+    }
+}
+
 int main(int argc, char *argv[]) {
     struct sockaddr *new_client_ptr = NULL;
     struct sockaddr_in new_client;
@@ -767,6 +805,8 @@ int main(int argc, char *argv[]) {
 
     /* Read argument options from command line*/
     readOptions(argc, argv, &dirname, &portNum, &workerThreads, &bufferSize, &serverPort, &serverIP);
+
+    pthread_t workers[workerThreads];
 
     pthread_mutex_init(&mtx_client_list, 0);
     pthread_mutex_init(&mtx_pool, 0);
@@ -868,9 +908,15 @@ int main(int argc, char *argv[]) {
     /* Create circular buffer.*/
     createCircularBuffer(&pool);
 
+    /* Create worker threads.*/
+    for (int i = 0; i < workerThreads; i++) {
+        pthread_create(&workers[i], NULL, worker, &pool);
+    }
+
     /****************************************************************************************************/
 
     fprintf(stdout, "::Waiting for connections on %s:%d::\n", currentHostStrIp, portNum);
+
     while (!quit_request) {
         read_fds = set;
         activity = pselect(lfd + 1, &read_fds, NULL, NULL, &timeout, &oldset);
@@ -883,9 +929,12 @@ int main(int argc, char *argv[]) {
                     fprintf(stdout, "::%ld bytes were transferred into %d different chunks on socket %d::\n",
                             s[i].bytes - 1,
                             s[i].chunks, i);
-                    fprintf(stdout, COLOR"%s\n"RESET"\n", (char *) s[i].buffer);
-                    shutdown(i, SHUT_RD);
-                    handler(i, s[i].buffer);
+                    fprintf(stdout, "::"COLOR" %s "RESET"::\n",
+                            (s[fd_active].bytes - 1 > 0) ? (char *) s[fd_active].buffer : "(Empty response body)");
+                    shutdown(fd_active, SHUT_RD);
+                    if (s[fd_active].bytes - 1 > 0) {
+                        handler(fd_active, &s[fd_active]);
+                    }
                     shutdown(i, SHUT_WR);
                     FD_CLR(i, &set);
                     if (i == lfd) {
@@ -958,7 +1007,10 @@ int main(int argc, char *argv[]) {
     /* Inform server with a LOG_OFF message.*/
     req_log_off();
 
-    //TODO: pthread_joins
+    /* Join workers*/
+    for (int i = 0; i < workerThreads; i++) {
+        pthread_join(workers[i], 0);
+    }
 
     free(currentHostStrIp);
     free(rcv_buffer);
