@@ -151,6 +151,38 @@ static void hdl(int sig) {
     quit_request = 1;
 }
 
+void place(pool_t *pool, in_addr_t ip, in_port_t port, char *pathname, long version) {
+    pthread_mutex_lock(&mtx_pool);
+    while (pool->count >= bufferSize) {
+        printf(">> Found Buffer Full \n");
+        pthread_cond_wait(&cond_nonfull, &mtx_pool);
+    }
+    pool->end = (pool->end + 1) % bufferSize;
+    pool->buffer[pool->end].ip = ip;
+    pool->buffer[pool->end].port = port;
+    strcpy(pool->buffer[pool->end].pathname, pathname);
+    pool->buffer[pool->end].version = version;
+    pool->count++;
+    pthread_mutex_unlock(&mtx_pool);
+}
+
+circular_buffer_t obtain(pool_t *pool) {
+    circular_buffer_t data;
+    pthread_mutex_lock(&mtx_pool);
+    while (pool->count <= 0) {
+        printf(">> Found Buffer Empty \n");
+        pthread_cond_wait(&cond_nonempty, &mtx_pool);
+    }
+    data.ip = pool->buffer[pool->start].ip;
+    data.port = pool->buffer[pool->start].port;
+    strcpy(data.pathname, pool->buffer[pool->start].pathname);
+    data.version = pool->buffer[pool->start].version;
+    pool->start = (pool->start + 1) % bufferSize;
+    pool->count--;
+    pthread_mutex_unlock(&mtx_pool);
+    return data;
+}
+
 /**
  * Open TCP connection.*/
 int openConnection(struct sockaddr_in address) {
@@ -312,13 +344,13 @@ void req_get_file(in_addr_t ip, in_port_t port, file_t_ptr file) {
     }
 }
 
-void req_log_on() {
+void req_log_on(in_addr_t ip, in_port_t port) {
     int fd = 0;
     struct sockaddr_in address;
     Client c = NULL;
     address.sin_family = AF_INET;
-    address.sin_addr.s_addr = inet_addr(serverIP);
-    address.sin_port = htons(serverPort);
+    address.sin_addr.s_addr = ip;
+    address.sin_port = port;
     if ((fd = openConnection(address)) > 0) {
         if (!createSession(fd, address)) {
             fprintf(stderr, "HOST_IS_TOO_BUSY");
@@ -331,13 +363,13 @@ void req_log_on() {
     }
 }
 
-void req_get_clients() {
+void req_get_clients(in_addr_t ip, in_port_t port) {
     int fd = 0;
     struct sockaddr_in address;
     Client c = NULL;
     address.sin_family = AF_INET;
-    address.sin_addr.s_addr = inet_addr(serverIP);
-    address.sin_port = htons(serverPort);
+    address.sin_addr.s_addr = ip;
+    address.sin_port = port;
     if ((fd = openConnection(address)) > 0) {
         if (!createSession(fd, address)) {
             fprintf(stderr, "HOST_IS_TOO_BUSY");
@@ -350,7 +382,7 @@ void req_get_clients() {
     }
 }
 
-void req_log_off() {
+void req_log_off(in_addr_t ip, in_port_t port) {
     int fd = 0;
     struct sockaddr_in address;
     Client c = NULL;
@@ -529,15 +561,8 @@ void handle_req_user_on(int fd_client, Session *session) {
             fprintf(stderr, "Insert error!\n");
             free(c);
         } else {
-
-            req_get_file_list(c->ip, c->port);
-
-
-            file = malloc(sizeof(struct file_t));
-            strcpy(file->pathname, "jobExecutor/main.c");
-            file->version = 232962259;
-
-            req_get_file(c->ip, c->port, file);
+            place(&pool, c->ip, c->port, "", 0);
+            pthread_cond_signal(&cond_nonempty);
         }
     } else {
         free(c);
@@ -604,7 +629,8 @@ void handle_res_get_file_list(int fd_client, Session *session) {
         memcpy(file, session->buffer + offset, sizeof(struct file_t));
         offset = offset + sizeof(struct file_t);
         printFileTuple(file);
-        //TODO: Insert into circular buffer, Mutex!!!
+        place(&pool, session->address.sin_addr.s_addr, session->address.sin_port, file->pathname, file->version);
+        pthread_cond_signal(&cond_nonempty);
     }
     fprintf(stdout, "\n");
 }
@@ -625,9 +651,29 @@ void handle_res_get_clients(int fd_client, Session *session) {
             if (listInsert(client_list, c)) {
                 printClientTuple(c);
             }
+            place(&pool, session->address.sin_addr.s_addr, session->address.sin_port, "", 0);
+            pthread_cond_signal(&cond_nonempty);
         }
     }
     fprintf(stdout, "\n");
+}
+
+void *worker(void *ptr) {
+    circular_buffer_t data;
+    printf("I am worker: %d\n", *((int *) ptr));
+    while (1) {
+        data = obtain(&pool);
+        if (strcmp(data.pathname, "") == 0 && data.version == 0) {
+            req_get_file_list(data.ip, data.port);
+        } else {
+            file_t_ptr file = malloc(sizeof(struct file_t));
+            strcpy(file->pathname, data.pathname);
+            file->version = 0;//data.version;
+            req_get_file(data.ip, data.port, file);
+            free(file);
+        }
+        pthread_cond_signal(&cond_nonfull);
+    }
 }
 
 void mkdirs(char *path) {
@@ -747,43 +793,6 @@ void handler(int fd_client, Session *session) {
     }
 }
 
-void place(pool_t *pool, int data) {
-    pthread_mutex_lock(&mtx_pool); // LOCK
-    while (pool->count >= bufferSize) {
-        printf(">> Found Buffer Full \n");
-        pthread_cond_wait(&cond_nonfull, &mtx_pool);
-    }
-    pool->end = (pool->end + 1) % bufferSize;
-    //pool->data[pool->end] = data;
-    pool->count++;
-    pthread_mutex_unlock(&mtx_pool); // UNLOCK
-}
-
-int obtain(pool_t *pool) {
-    int data = 0;
-    pthread_mutex_lock(&mtx_pool);
-    while (pool->count <= 0) {
-        printf(">> Found Buffer Empty \n");
-        pthread_cond_wait(&cond_nonempty, &mtx_pool);
-    }
-    //data = pool->data[pool->start];
-
-    //TODO CALL THE RIGHT FUNCTIONS
-
-    pool->start = (pool->start + 1) % bufferSize;
-    pool->count--;
-    pthread_mutex_unlock(&mtx_pool);
-    return data;
-}
-
-void *worker(void *ptr) {
-    while (pool.count > 0) {
-        printf("C[%s]: %d\n", (char *) ptr, obtain(&pool));
-        pthread_cond_signal(&cond_nonfull);
-        usleep(500000);
-    }
-}
-
 int main(int argc, char *argv[]) {
     struct sockaddr *new_client_ptr = NULL;
     struct sockaddr_in new_client;
@@ -900,17 +909,17 @@ int main(int argc, char *argv[]) {
     initSessionArray();
 
     /* LOG_ON request.*/
-    req_log_on();
+    req_log_on(inet_addr(serverIP), htons(serverPort));
 
     /* GET_CLIENTS request.*/
-    req_get_clients();
+    req_get_clients(inet_addr(serverIP), htons(serverPort));
 
     /* Create circular buffer.*/
     createCircularBuffer(&pool);
 
     /* Create worker threads.*/
     for (int i = 0; i < workerThreads; i++) {
-        pthread_create(&workers[i], NULL, worker, &pool);
+        pthread_create(&workers[i], NULL, worker, &i);
     }
 
     /****************************************************************************************************/
@@ -1005,7 +1014,7 @@ int main(int argc, char *argv[]) {
     }
 
     /* Inform server with a LOG_OFF message.*/
-    req_log_off();
+    req_log_off(inet_addr(serverIP), htons(serverPort));
 
     /* Join workers*/
     for (int i = 0; i < workerThreads; i++) {
