@@ -8,11 +8,28 @@
 #include <dirent.h>
 #include <fcntl.h>
 #include <errno.h>
-#include "handlers.h"
+#include "handler.h"
 #include "list.h"
 #include "client.h"
 #include "file.h"
 #include "buffer.h"
+
+void mkdirs(char *path) {
+    struct stat s = {0};
+    char *pch = NULL, ch;
+    unsigned long int i = 0;
+    pch = strchr(path, '/');
+    while (pch != NULL) {
+        i = pch - path + 1;
+        ch = path[i];
+        path[i] = '\0';
+        if (stat(path, &s)) {
+            mkdir(path, S_IRUSR | S_IWUSR | S_IXUSR);
+        }
+        path[i] = ch;
+        pch = strchr(pch + 1, '/');
+    }
+}
 
 /**
  * Read directory & subdirectories recursively*/
@@ -329,6 +346,58 @@ void handle_res_get_file_list(int fd_client, Session *session) {
     fprintf(stdout, "\n");
 }
 
+void handle_res_get_file(int fd_client, Session *session) {
+    int offset = 4, fd_file = 0;
+    char path[PATH_MAX];
+    char filename[PATH_MAX];
+    long int version = 0;
+    size_t bytes = 0;
+    size_t fileNameLength = 0;
+
+    /* File name length*/
+    memcpy(&fileNameLength, session->buffer + offset, sizeof(size_t));
+    offset += sizeof(size_t);
+    fprintf(stdout, "%ld ", fileNameLength);
+
+    /* File name*/
+    memcpy(&filename, session->buffer + offset, fileNameLength);
+    offset += fileNameLength;
+    filename[fileNameLength] = '\0';
+    fprintf(stdout, "%s ", filename);
+
+    /* File version*/
+    memcpy(&version, session->buffer + offset, sizeof(long int));
+    offset += sizeof(long int);
+    fprintf(stdout, "%ld ", version);
+
+    /* Number of bytes*/
+    memcpy(&bytes, session->buffer + offset, sizeof(long int));
+    offset += sizeof(long int);
+    fprintf(stdout, "%ld ", bytes);
+
+    if (sprintf(path, "%s/%d%d/%s", dirname, session->address.sin_addr.s_addr,
+                session->address.sin_port, filename) < 0) {
+        fprintf(stderr, "\n%s:%d-sprintf error\n", __FILE__, __LINE__);
+    }
+
+    /* Make dirs if not exists.*/
+    mkdirs(path);
+
+    //todo: if is file
+    if (1) {
+        /* Open file for write*/
+        if ((fd_file = open(path, O_CREAT | O_WRONLY | O_TRUNC, S_IRUSR | S_IWUSR | S_IXUSR)) < 0) {
+            fprintf(stderr, "\n%s:%d-file '%s' open error: '%s'\n", __FILE__, __LINE__, path, strerror(errno));
+        }
+
+        if (write(fd_file, session->buffer + offset, bytes) == -1) {
+            fprintf(stderr, "\n%s:%d-file write error: '%s'\n", __FILE__, __LINE__, strerror(errno));
+        }
+    }
+
+    fprintf(stdout, "\n");
+}
+
 void handle_res_get_clients(int fd_client, Session *session) {
     unsigned int clients = 0;
     Client c = NULL;
@@ -356,4 +425,52 @@ void handle_res_get_clients(int fd_client, Session *session) {
         }
     }
     fprintf(stdout, "\n");
+}
+
+/**
+ * Handle requests & responses.*/
+void handler(int fd_client, Session *session) {
+    if (strncmp(session->buffer, "GET_FILE_LIST", 13) == 0) {
+        fprintf(stdout, "\n\nREQUEST: GET_FILE_LIST ");
+        handle_req_get_file_list(fd_client, session);
+    } else if (strncmp(session->buffer, "GET_FILE", 8) == 0) {
+        fprintf(stdout, "\n\nREQUEST: GET_FILE ");
+        handle_req_get_file(fd_client, session);
+    } else if (strncmp(session->buffer, "USER_ON", 7) == 0) {
+        fprintf(stdout, "\n\nREQUEST: USER_ON ");
+        handle_req_user_on(fd_client, session);
+    } else if (strncmp(session->buffer, "USER_OFF", 8) == 0) {
+        fprintf(stdout, "\n\nREQUEST: USER_OFF\n");
+        handle_req_user_off(fd_client, session);
+    } else if (strncmp(session->buffer, "FILE_LIST", 9) == 0) {
+        fprintf(stdout, "\n\nRESPONSE: FILE_LIST ");
+        handle_res_get_file_list(fd_client, session);
+    } else if (strncmp(session->buffer, "LOG_ON_SUCCESS", 14) == 0) {
+        fprintf(stdout, "\n\nRESPONSE: LOG_ON_SUCCESS\n");
+    } else if (strncmp(session->buffer, "ALREADY_LOGGED_IN", 17) == 0) {
+        fprintf(stdout, "\n\nRESPONSE: ALREADY_LOGGED_IN\n");
+    } else if (strncmp(session->buffer, "CLIENT_LIST", 11) == 0) {
+        fprintf(stdout, "\n\nRESPONSE: CLIENT_LIST ");
+        handle_res_get_clients(fd_client, session);
+    } else if (strncmp(session->buffer, "ERROR_IP_PORT_NOT_FOUND_IN_LIST", 31) == 0) {
+        fprintf(stdout, "\n\nRESPONSE: ERROR_IP_PORT_NOT_FOUND_IN_LIST\n");
+    } else if (strncmp(session->buffer, "ERROR_NOT_REMOVED", 17) == 0) {
+        fprintf(stdout, "\n\nRESPONSE: ERROR_NOT_REMOVED\n");
+    } else if (strncmp(session->buffer, "LOG_OFF_SUCCESS", 15) == 0) {
+        fprintf(stdout, "\n\nRESPONSE: LOG_OFF_SUCCESS\n");
+    } else if (strncmp(session->buffer, "FILE_NOT_FOUND", 14) == 0) {
+        fprintf(stdout, "\n\nRESPONSE: FILE_NOT_FOUND\n");
+    } else if (strncmp(session->buffer, "FILE_UP_TO_DATE", 15) == 0) {
+        fprintf(stdout, "\n\nRESPONSE: FILE_UP_TO_DATE\n");
+    } else if (strncmp(session->buffer, "FILE", 4) == 0) {
+        fprintf(stdout, "\n\nRESPONSE: FILE ");
+        handle_res_get_file(fd_client, session);
+    } else if (strncmp(session->buffer, "GET_CLIENTS", 11) == 0) {
+        fprintf(stdout, "\n\nREQUEST: GET_CLIENTS\n");
+        handle_req_get_clients(fd_client, session);
+    } else if (strncmp(session->buffer, "UNKNOWN_COMMAND", 15) == 0) {
+        fprintf(stdout, "\n\nRESPONSE: UNKNOWN_COMMAND\n");
+    } else {
+        fprintf(stderr, "\n\nUNKNOWN_COMMAND\n");
+    }
 }

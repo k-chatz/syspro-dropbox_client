@@ -14,27 +14,27 @@
 #include <fcntl.h>
 #include "list.h"
 #include "session.h"
-#include "handlers.h"
+#include "handler.h"
 #include "file.h"
 #include "buffer.h"
 #include "client.h"
+#include "request.h"
 
 #define COLOR "\x1B[33m"
 #define RESET "\x1B[0m"
 
 static volatile int quit_request = 0;
 
-char *dirname = NULL, *serverIP = NULL;
-pthread_cond_t condNonEmpty, condNonFull;
-pthread_mutex_t mtx_client_list, mtx_pool;
-pool_t pool;
-List client_list = NULL;
-Session s[FD_SETSIZE];
-fd_set set;
-
 int workerThreads = 0, bufferSize = 0, lfd = 0;
+pthread_mutex_t mtx_client_list, mtx_pool;
+pthread_cond_t condNonEmpty, condNonFull;
+char *dirname = NULL, *serverIP = NULL;
 uint16_t portNum = 0, serverPort = 0;
 struct in_addr currentHostAddr;
+List client_list = NULL;
+Session s[FD_SETSIZE];
+pool_t pool;
+fd_set set;
 
 void wrongOptionValue(char *opt, char *val) {
     fprintf(stderr, "\nWrong value [%s] for option '%s'\n", val, opt);
@@ -104,165 +104,6 @@ static void hdl(int sig) {
     quit_request = 1;
 }
 
-
-/**
- * Open TCP connection.*/
-int openConnection(struct sockaddr_in address) {
-    int fd = 0;
-    struct sockaddr *in_addr_ptr = NULL;
-    in_addr_ptr = (struct sockaddr *) &address;
-
-    /* Create socket */
-    if ((fd = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP)) < 0) {
-        perror("socket");
-        return 0;
-    }
-
-    fprintf(stdout, "::Connecting socket %d to remote host %s:%d::\n", fd, inet_ntoa(address.sin_addr),
-            ntohs(address.sin_port));
-
-    /* Initiate connection */
-    if (connect(fd, in_addr_ptr, sizeof(struct sockaddr)) < 0) {
-        perror("connect");
-        return 0;
-    }
-
-    fprintf(stdout, "::Connection to remote host %s:%d established::\n", inet_ntoa(address.sin_addr),
-            ntohs(address.sin_port));
-
-    return fd;
-}
-
-Client createClient(in_addr_t addr, in_port_t port) {
-    Client c = malloc(sizeof(struct client));
-    c->ip = addr;
-    c->port = port;
-    return c;
-}
-
-
-void initSessionArray() {
-    for (int i = 0; i < FD_SETSIZE; i++) {
-        s[i].buffer = NULL;
-        s[i].bytes = 0;
-        s[i].chunks = 0;
-    }
-}
-
-int createSession(int fd, struct sockaddr_in address) {
-    if (fd <= FD_SETSIZE) {
-        s[fd].buffer = malloc(1);
-        s[fd].bytes = 1;
-        s[fd].chunks = 0;
-        s[fd].address = address;
-        FD_SET(fd, &set);
-        if (fd > lfd) {
-            lfd = fd;
-        }
-        return 1;
-    } else {
-        return 0;
-    }
-}
-
-void destroySession(int fd) {
-    FD_CLR(fd, &set);
-    if (fd == lfd) {
-        lfd--;
-    }
-    close(fd);
-    free(s[fd].buffer);
-    s[fd].buffer = NULL;
-}
-
-void req_get_file_list(in_addr_t ip, in_port_t port) {
-    int fd = 0;
-    struct sockaddr_in address;
-    address.sin_family = AF_INET;
-    address.sin_addr.s_addr = ip;
-    address.sin_port = port;
-    fprintf(stdout, "GET_FILE_LIST\n");
-    if ((fd = openConnection(address)) > 0) {
-        createSession(fd, address);
-        send(fd, "GET_FILE_LIST", 13, 0);
-        Client c1 = createClient(currentHostAddr.s_addr, htons(portNum));
-        send(fd, c1, sizeof(struct client), 0);
-        free(c1);
-        shutdown(fd, SHUT_WR);
-    }
-}
-
-void req_get_file(in_addr_t ip, in_port_t port, file_t_ptr file) {
-    int fd = 0;
-    struct sockaddr_in address;
-    address.sin_family = AF_INET;
-    address.sin_addr.s_addr = ip;
-    address.sin_port = port;
-    if ((fd = openConnection(address)) > 0) {
-        createSession(fd, address);
-        send(fd, "GET_FILE", 8, 0);
-        Client c1 = createClient(currentHostAddr.s_addr, htons(portNum));
-        send(fd, c1, sizeof(struct client), 0);
-        free(c1);
-        send(fd, file, sizeof(struct file_t), 0);
-        shutdown(fd, SHUT_WR);
-    }
-}
-
-void req_log_on(in_addr_t ip, in_port_t port) {
-    int fd = 0;
-    struct sockaddr_in address;
-    Client c = NULL;
-    address.sin_family = AF_INET;
-    address.sin_addr.s_addr = ip;
-    address.sin_port = port;
-    if ((fd = openConnection(address)) > 0) {
-        if (!createSession(fd, address)) {
-            fprintf(stderr, "HOST_IS_TOO_BUSY");
-        }
-        send(fd, "LOG_ON", 6, 0);
-        c = createClient(currentHostAddr.s_addr, htons(portNum));
-        send(fd, c, sizeof(struct client), 0);
-        free(c);
-        shutdown(fd, SHUT_WR);
-    }
-}
-
-void req_get_clients(in_addr_t ip, in_port_t port) {
-    int fd = 0;
-    struct sockaddr_in address;
-    Client c = NULL;
-    address.sin_family = AF_INET;
-    address.sin_addr.s_addr = ip;
-    address.sin_port = port;
-    if ((fd = openConnection(address)) > 0) {
-        if (!createSession(fd, address)) {
-            fprintf(stderr, "HOST_IS_TOO_BUSY");
-        }
-        send(fd, "GET_CLIENTS", 11, 0);
-        c = createClient(currentHostAddr.s_addr, htons(portNum));
-        send(fd, c, sizeof(struct client), 0);
-        free(c);
-        shutdown(fd, SHUT_WR);
-    }
-}
-
-void req_log_off(in_addr_t ip, in_port_t port) {
-    int fd = 0;
-    struct sockaddr_in address;
-    Client c = NULL;
-    address.sin_family = AF_INET;
-    address.sin_addr.s_addr = inet_addr(serverIP);
-    address.sin_port = htons(serverPort);
-    if ((fd = openConnection(address) > 0)) {
-        send(fd, "LOG_OFF", 7, 0);
-        c = createClient(currentHostAddr.s_addr, htons(portNum));
-        send(fd, c, sizeof(struct client), 0);
-        free(c);
-        shutdown(fd, SHUT_WR);
-    }
-}
-
 void *worker(void *ptr) {
     circular_buffer_t data;
     printf("I am worker: %d\n", *((int *) ptr));
@@ -281,130 +122,11 @@ void *worker(void *ptr) {
     }
 }
 
-void mkdirs(char *path) {
-    struct stat s = {0};
-    char *pch = NULL, ch;
-    unsigned long int i = 0;
-    pch = strchr(path, '/');
-    while (pch != NULL) {
-        i = pch - path + 1;
-        ch = path[i];
-        path[i] = '\0';
-        if (stat(path, &s)) {
-            mkdir(path, S_IRUSR | S_IWUSR | S_IXUSR);
-        }
-        path[i] = ch;
-        pch = strchr(pch + 1, '/');
-    }
-}
-
-void handle_res_get_file(int fd_client, Session *session) {
-    int offset = 4, fd_file = 0;
-    char path[PATH_MAX];
-    char filename[PATH_MAX];
-    long int version = 0;
-    size_t bytes = 0;
-    size_t fileNameLength = 0;
-
-    /* File name length*/
-    memcpy(&fileNameLength, session->buffer + offset, sizeof(size_t));
-    offset += sizeof(size_t);
-    fprintf(stdout, "%ld ", fileNameLength);
-
-    /* File name*/
-    memcpy(&filename, session->buffer + offset, fileNameLength);
-    offset += fileNameLength;
-    filename[fileNameLength] = '\0';
-    fprintf(stdout, "%s ", filename);
-
-    /* File version*/
-    memcpy(&version, session->buffer + offset, sizeof(long int));
-    offset += sizeof(long int);
-    fprintf(stdout, "%ld ", version);
-
-    /* Number of bytes*/
-    memcpy(&bytes, session->buffer + offset, sizeof(long int));
-    offset += sizeof(long int);
-    fprintf(stdout, "%ld ", bytes);
-
-    if (sprintf(path, "%s/%d%d/%s", dirname, session->address.sin_addr.s_addr,
-                session->address.sin_port, filename) < 0) {
-        fprintf(stderr, "\n%s:%d-sprintf error\n", __FILE__, __LINE__);
-    }
-
-    /* Make dirs if not exists.*/
-    mkdirs(path);
-
-    //todo: if is file
-    if (1) {
-        /* Open file for write*/
-        if ((fd_file = open(path, O_CREAT | O_WRONLY | O_TRUNC, S_IRUSR | S_IWUSR | S_IXUSR)) < 0) {
-            fprintf(stderr, "\n%s:%d-file '%s' open error: '%s'\n", __FILE__, __LINE__, path, strerror(errno));
-        }
-
-        if (write(fd_file, session->buffer + offset, bytes) == -1) {
-            fprintf(stderr, "\n%s:%d-file write error: '%s'\n", __FILE__, __LINE__, strerror(errno));
-        }
-    }
-
-    fprintf(stdout, "\n");
-}
-
-/**
- * Handle requests & responses.*/
-void handler(int fd_client, Session *session) {
-    if (strncmp(session->buffer, "GET_FILE_LIST", 13) == 0) {
-        fprintf(stdout, "\n\nREQUEST: GET_FILE_LIST ");
-        handle_req_get_file_list(fd_client, session);
-    } else if (strncmp(session->buffer, "GET_FILE", 8) == 0) {
-        fprintf(stdout, "\n\nREQUEST: GET_FILE ");
-        handle_req_get_file(fd_client, session);
-    } else if (strncmp(session->buffer, "USER_ON", 7) == 0) {
-        fprintf(stdout, "\n\nREQUEST: USER_ON ");
-        handle_req_user_on(fd_client, session);
-    } else if (strncmp(session->buffer, "USER_OFF", 8) == 0) {
-        fprintf(stdout, "\n\nREQUEST: USER_OFF\n");
-        handle_req_user_off(fd_client, session);
-    } else if (strncmp(session->buffer, "FILE_LIST", 9) == 0) {
-        fprintf(stdout, "\n\nRESPONSE: FILE_LIST ");
-        handle_res_get_file_list(fd_client, session);
-    } else if (strncmp(session->buffer, "LOG_ON_SUCCESS", 14) == 0) {
-        fprintf(stdout, "\n\nRESPONSE: LOG_ON_SUCCESS\n");
-    } else if (strncmp(session->buffer, "ALREADY_LOGGED_IN", 17) == 0) {
-        fprintf(stdout, "\n\nRESPONSE: ALREADY_LOGGED_IN\n");
-    } else if (strncmp(session->buffer, "CLIENT_LIST", 11) == 0) {
-        fprintf(stdout, "\n\nRESPONSE: CLIENT_LIST ");
-        handle_res_get_clients(fd_client, session);
-    } else if (strncmp(session->buffer, "ERROR_IP_PORT_NOT_FOUND_IN_LIST", 31) == 0) {
-        fprintf(stdout, "\n\nRESPONSE: ERROR_IP_PORT_NOT_FOUND_IN_LIST\n");
-    } else if (strncmp(session->buffer, "ERROR_NOT_REMOVED", 17) == 0) {
-        fprintf(stdout, "\n\nRESPONSE: ERROR_NOT_REMOVED\n");
-    } else if (strncmp(session->buffer, "LOG_OFF_SUCCESS", 15) == 0) {
-        fprintf(stdout, "\n\nRESPONSE: LOG_OFF_SUCCESS\n");
-    } else if (strncmp(session->buffer, "FILE_NOT_FOUND", 14) == 0) {
-        fprintf(stdout, "\n\nRESPONSE: FILE_NOT_FOUND\n");
-    } else if (strncmp(session->buffer, "FILE_UP_TO_DATE", 15) == 0) {
-        fprintf(stdout, "\n\nRESPONSE: FILE_UP_TO_DATE\n");
-    } else if (strncmp(session->buffer, "FILE", 4) == 0) {
-        fprintf(stdout, "\n\nRESPONSE: FILE ");
-        handle_res_get_file(fd_client, session);
-    } else if (strncmp(session->buffer, "GET_CLIENTS", 11) == 0) {
-        fprintf(stdout, "\n\nREQUEST: GET_CLIENTS\n");
-        handle_req_get_clients(fd_client, session);
-    } else if (strncmp(session->buffer, "UNKNOWN_COMMAND", 15) == 0) {
-        fprintf(stdout, "\n\nRESPONSE: UNKNOWN_COMMAND\n");
-    } else {
-        fprintf(stderr, "\n\nUNKNOWN_COMMAND\n");
-    }
-}
-
 int main(int argc, char *argv[]) {
     struct sockaddr *new_client_ptr = NULL;
     struct sockaddr_in new_client;
-
     struct sockaddr *listen_ptr = NULL;
     struct sockaddr_in listen_in_addr;
-
     struct hostent *hostEntry = NULL;
     struct timespec timeout;
     struct sigaction sa;
@@ -580,7 +302,7 @@ int main(int argc, char *argv[]) {
                             ntohs(new_client.sin_port),
                             fd_new_client);
 
-                    if (!createSession(fd_new_client, new_client)) {
+                    if (!createSession(fd_new_client, &lfd, new_client, NULL)) {
                         fprintf(stderr, "HOST_IS_TOO_BUSY");
                         send(fd_new_client, "HOST_IS_TOO_BUSY", 16, 0);
                         close(fd_new_client);
@@ -599,7 +321,7 @@ int main(int argc, char *argv[]) {
                             handler(fd_active, &s[fd_active]);
                         }
                         shutdown(fd_active, SHUT_WR);
-                        destroySession(fd_active);
+                        destroySession(fd_active, &lfd, &set);
                     } else if (bytes > 0) {
                         size_t offset = s[fd_active].chunks ? s[fd_active].bytes - 1 : 0;
                         s[fd_active].buffer = realloc(s[fd_active].buffer, s[fd_active].bytes + bytes - 1);

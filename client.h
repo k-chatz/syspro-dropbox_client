@@ -6,6 +6,8 @@ typedef struct client {
     in_port_t port;
 } *Client;
 
+Client createClient(in_addr_t addr, in_port_t port);
+
 void printClientTuple(Client c);
 
 #endif

@@ -1,5 +1,5 @@
-#ifndef DROPBOX_CLIENT_SESSION_H
-#define DROPBOX_CLIENT_SESSION_H
+#ifndef SESSION_H
+#define SESSION_H
 
 #include <netdb.h>
 
@@ -10,4 +10,12 @@ typedef struct session {
     struct sockaddr_in address;
 } Session;
 
-#endif //DROPBOX_CLIENT_SESSION_H
+extern Session s[FD_SETSIZE];
+
+int createSession(int fd, int *lfd, struct sockaddr_in address, fd_set *set);
+
+void destroySession(int fd, int *lfd, fd_set *set);
+
+void initSessionArray();
+
+#endif
