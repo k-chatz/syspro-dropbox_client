@@ -32,7 +32,7 @@ void req_get_file(in_addr_t ip, in_port_t port, file_t_ptr file) {
     address.sin_addr.s_addr = ip;
     address.sin_port = port;
     if ((fd = openConnection(address)) > 0) {
-        createSession(fd, &lfd, address, NULL);
+        createSession(fd, &lfd, address, &set);
         send(fd, "GET_FILE", 8, 0);
         Client c1 = createClient(currentHostAddr.s_addr, htons(portNum));
         send(fd, c1, sizeof(struct client), 0);

@@ -54,7 +54,7 @@ void fdMonitor(fd_set *set, fd_set *read_fds, sigset_t *oldset) {
     timeout.tv_nsec = 0;
     activity = pselect(lfd + 1, read_fds, NULL, NULL, &timeout, oldset);
     if (activity < 0 && (errno != EINTR)) {
-        perror("select");
+        perror("pselect");
     } else if (activity == 0) {
         for (int i = 0; i < FD_SETSIZE; i++) {
             if (s[i].buffer != NULL) {
@@ -84,8 +84,8 @@ void fdMonitor(fd_set *set, fd_set *read_fds, sigset_t *oldset) {
 
 /**
  * fd Activity Handler.*/
-void fdActivityHandler(fd_set *read_fds, void *buffer, size_t bufferSize) {
-    int fd_active = 0, fd_listen = 0, fd_new_client = 0;
+void fdActivityHandler(fd_set *read_fds, int fd_listen, void *buffer, size_t bufferSize) {
+    int fd_active = 0, fd_new_client = 0;
     struct sockaddr *new_client_ptr = NULL;
     struct sockaddr_in new_client;
     socklen_t client_len = sizeof(struct sockaddr);
@@ -106,7 +106,7 @@ void fdActivityHandler(fd_set *read_fds, void *buffer, size_t bufferSize) {
                         ntohs(new_client.sin_port),
                         fd_new_client);
 
-                if (!createSession(fd_new_client, &lfd, new_client, NULL)) {
+                if (!createSession(fd_new_client, &lfd, new_client, &set)) {
                     fprintf(stderr, "HOST_IS_TOO_BUSY");
                     send(fd_new_client, "HOST_IS_TOO_BUSY", 16, 0);
                     close(fd_new_client);

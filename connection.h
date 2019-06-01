@@ -7,6 +7,6 @@ int openConnection(struct sockaddr_in address);
 
 void fdMonitor(fd_set *set, fd_set *read_fds, sigset_t *oldset);
 
-void fdActivityHandler(fd_set *read_fds, void *buffer, size_t bufferSize);
+void fdActivityHandler(fd_set *read_fds, int fd_listen, void *buffer, size_t bufferSize);
 
 #endif

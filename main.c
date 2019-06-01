@@ -186,7 +186,7 @@ int main(int argc, char *argv[]) {
             fprintf(stdout, "C[%d]: quiting ...""\n", getpid());
             break;
         }
-        fdActivityHandler(&read_fds, rcv_buffer, socket_rcv_size);
+        fdActivityHandler(&read_fds, fd_listen, rcv_buffer, socket_rcv_size);
     }
 
     /* Inform server with a LOG_OFF message.*/

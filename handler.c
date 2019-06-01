@@ -94,7 +94,6 @@ void handle_req_get_file_list(int fd_client, Session *session) {
     fprintf(stdout, "\n");
 
     pthread_mutex_lock(&mtx_client_list);
-
     listSetCurrentToStart(client_list);
     while ((client = listNext(client_list)) != NULL) {
         if (c->ip == client->ip && c->port == client->port) {
@@ -102,8 +101,8 @@ void handle_req_get_file_list(int fd_client, Session *session) {
             break;
         }
     }
-
     pthread_mutex_unlock(&mtx_client_list);
+
 
     if (found) {
         listCreate(&file_list);
@@ -112,11 +111,15 @@ void handle_req_get_file_list(int fd_client, Session *session) {
         send(fd_client, "FILE_LIST", 9, 0);
         send(fd_client, &files, sizeof(unsigned int), 0);
         fprintf(stdout, "FILE_LIST %d ", files);
+
+        pthread_mutex_lock(&mtx_client_list);
         listSetCurrentToStart(file_list);
         while ((file = listNext(file_list)) != NULL) {
             send(fd_client, file, sizeof(struct file_t), 0);
             printFileTuple(file);
         }
+        pthread_mutex_unlock(&mtx_client_list);
+
         fprintf(stdout, "\n");
     } else {
         free(c);
@@ -142,7 +145,6 @@ void handle_req_get_file(int fd_client, Session *session) {
     fprintf(stdout, " ");
 
     pthread_mutex_lock(&mtx_client_list);
-
     listSetCurrentToStart(client_list);
     while ((client = listNext(client_list)) != NULL) {
         if (c->ip == client->ip && c->port == client->port) {
@@ -150,7 +152,6 @@ void handle_req_get_file(int fd_client, Session *session) {
             break;
         }
     }
-
     pthread_mutex_unlock(&mtx_client_list);
 
     if (found) {
@@ -241,7 +242,6 @@ void handle_req_user_on(int fd_client, Session *session) {
     fprintf(stdout, "\n");
 
     pthread_mutex_lock(&mtx_client_list);
-
     listSetCurrentToStart(client_list);
     while ((client = listNext(client_list)) != NULL) {
         if (c->ip == client->ip && c->port == client->port) {
@@ -250,22 +250,25 @@ void handle_req_user_on(int fd_client, Session *session) {
             break;
         }
     }
+    pthread_mutex_unlock(&mtx_client_list);
 
     if (!found) {
-        if (!listInsert(client_list, c)) {
+
+        pthread_mutex_lock(&mtx_client_list);
+        int x = listInsert(client_list, c);
+        pthread_mutex_unlock(&mtx_client_list);
+
+        if (!x) {
             fprintf(stderr, "Insert error!\n");
             free(c);
         } else {
-            printf(LIGHT_BLUE"Main thread place %d...\n"RESET, ntohs(c->port));
+            printf(LIGHT_BLUE"\nMain thread (handle_req_user_on) place NEW connection %d ...\n"RESET, ntohs(c->port));
             place(&pool, c->ip, c->port, "", 0);
             pthread_cond_signal(&condNonEmpty);
         }
     } else {
         free(c);
     }
-
-    pthread_mutex_unlock(&mtx_client_list);
-
 }
 
 void handle_req_user_off(int fd_client, Session *session) {
@@ -275,7 +278,6 @@ void handle_req_user_off(int fd_client, Session *session) {
     memcpy(c, session->buffer + 8, sizeof(struct client));
 
     pthread_mutex_lock(&mtx_client_list);
-
     listSetCurrentToStart(client_list);
     while ((client = listNext(client_list)) != NULL) {
         if (c->ip == client->ip && c->port == client->port) {
@@ -291,7 +293,6 @@ void handle_req_user_off(int fd_client, Session *session) {
             break;
         }
     }
-
     pthread_mutex_unlock(&mtx_client_list);
 
     if (!found) {
@@ -308,7 +309,6 @@ void handle_req_get_clients(int fd_client, Session *session) {
     memcpy(c, session->buffer + 11, sizeof(struct client));
 
     pthread_mutex_lock(&mtx_client_list);
-
     clients = listGetLength(client_list) - 1;
     send(fd_client, "CLIENT_LIST", 11, 0);
     fprintf(stdout, "CLIENT_LIST ");
@@ -321,7 +321,6 @@ void handle_req_get_clients(int fd_client, Session *session) {
             printClientTuple(client);
         }
     }
-
     pthread_mutex_unlock(&mtx_client_list);
 
     fprintf(stdout, "\n");
@@ -340,7 +339,8 @@ void handle_res_get_file_list(int fd_client, Session *session) {
         memcpy(file, session->buffer + offset, sizeof(struct file_t));
         offset = offset + sizeof(struct file_t);
         printFileTuple(file);
-        printf(LIGHT_BLUE"Main thread place %d...\n"RESET, ntohs(session->address.sin_port));
+        printf(LIGHT_BLUE"\nMain thread (handle_res_get_file_list) place %d - %s - %ld ...\n"RESET,
+               ntohs(session->address.sin_port), file->pathname, file->version);
         place(&pool, session->address.sin_addr.s_addr, session->address.sin_port, file->pathname, file->version);
         pthread_cond_signal(&condNonEmpty);
     }
@@ -414,15 +414,15 @@ void handle_res_get_clients(int fd_client, Session *session) {
             offset = offset + sizeof(struct client);
 
             pthread_mutex_lock(&mtx_client_list);
-
             if (listInsert(client_list, c)) {
                 printClientTuple(c);
             }
-
             pthread_mutex_unlock(&mtx_client_list);
 
-            printf(LIGHT_BLUE"Main thread place %d...\n"RESET, ntohs(session->address.sin_port));
-            place(&pool, session->address.sin_addr.s_addr, session->address.sin_port, "", 0);
+            printf(LIGHT_BLUE"\nMain thread (handle_res_get_clients) place NEW connection %d ...\n"RESET,
+                   ntohs(c->port));
+            place(&pool, c->ip, c->port, "", 0);
+
             pthread_cond_signal(&condNonEmpty);
         }
     }
