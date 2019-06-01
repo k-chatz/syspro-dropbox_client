@@ -384,7 +384,7 @@ void handle_res_get_file(int fd_client, Session *session) {
     /* Make dirs if not exists.*/
     mkdirs(path);
 
-    if (path[strlen(path)] != '/') {
+    if (path[strlen(path) - 1] != '/') {
         /* Open file for write*/
         if ((fd_file = open(path, O_CREAT | O_WRONLY | O_TRUNC, S_IRUSR | S_IWUSR | S_IXUSR)) < 0) {
             fprintf(stderr, "\n%s:%d-file '%s' open error: '%s'\n", __FILE__, __LINE__, path, strerror(errno));

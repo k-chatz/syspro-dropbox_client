@@ -16,7 +16,7 @@ void req_get_file_list(in_addr_t ip, in_port_t port) {
     address.sin_port = port;
     fprintf(stdout, "GET_FILE_LIST\n");
     if ((fd = openConnection(address)) > 0) {
-        createSession(fd, &lfd, address, &set);
+        createSession(fd, address, &set);
         send(fd, "GET_FILE_LIST", 13, 0);
         Client c1 = createClient(currentHostAddr.s_addr, htons(portNum));
         send(fd, c1, sizeof(struct client), 0);
@@ -32,7 +32,7 @@ void req_get_file(in_addr_t ip, in_port_t port, file_t_ptr file) {
     address.sin_addr.s_addr = ip;
     address.sin_port = port;
     if ((fd = openConnection(address)) > 0) {
-        createSession(fd, &lfd, address, &set);
+        createSession(fd, address, &set);
         send(fd, "GET_FILE", 8, 0);
         Client c1 = createClient(currentHostAddr.s_addr, htons(portNum));
         send(fd, c1, sizeof(struct client), 0);
@@ -50,7 +50,7 @@ void req_log_on(in_addr_t ip, in_port_t port) {
     address.sin_addr.s_addr = ip;
     address.sin_port = port;
     if ((fd = openConnection(address)) > 0) {
-        if (!createSession(fd, &lfd, address, &set)) {
+        if (!createSession(fd, address, &set)) {
             fprintf(stderr, "HOST_IS_TOO_BUSY");
         }
         send(fd, "LOG_ON", 6, 0);
@@ -69,7 +69,7 @@ void req_get_clients(in_addr_t ip, in_port_t port) {
     address.sin_addr.s_addr = ip;
     address.sin_port = port;
     if ((fd = openConnection(address)) > 0) {
-        if (!createSession(fd, &lfd, address, &set)) {
+        if (!createSession(fd, address, &set)) {
             fprintf(stderr, "HOST_IS_TOO_BUSY");
         }
         send(fd, "GET_CLIENTS", 11, 0);

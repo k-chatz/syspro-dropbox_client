@@ -39,7 +39,7 @@ static void hdl(int sig) {
 
 void *worker(void *ptr) {
     circular_buffer_t data;
-    while (1) {
+    while (!quit_request) {
         printf(GREEN"%d working ...\n"RESET, *((int *) ptr));
         data = obtain(&pool);
         if (strcmp(data.pathname, "") == 0 && data.version == 0) {
@@ -55,6 +55,7 @@ void *worker(void *ptr) {
         }
         pthread_cond_signal(&condNonFull);
     }
+    pthread_exit(0);
 }
 
 int main(int argc, char *argv[]) {

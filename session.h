@@ -11,10 +11,11 @@ typedef struct session {
 } Session;
 
 extern Session s[FD_SETSIZE];
+extern int lfd;
 
-int createSession(int fd, int *lfd, struct sockaddr_in address, fd_set *set);
+int createSession(int fd, struct sockaddr_in address, fd_set *set);
 
-void destroySession(int fd, int *lfd, fd_set *set);
+void destroySession(int fd, fd_set *set);
 
 void initSessionArray();
 

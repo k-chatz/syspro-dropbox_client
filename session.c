@@ -2,15 +2,15 @@
 #include <zconf.h>
 #include "session.h"
 
-int createSession(int fd, int *lfd, struct sockaddr_in address, fd_set *set) {
+int createSession(int fd, struct sockaddr_in address, fd_set *set) {
     if (fd <= FD_SETSIZE) {
         s[fd].buffer = malloc(1);
         s[fd].bytes = 1;
         s[fd].chunks = 0;
         s[fd].address = address;
         FD_SET(fd, set);
-        if (fd > *lfd) {
-            *lfd = fd;
+        if (fd > lfd) {
+            lfd = fd;
         }
         return 1;
     } else {
@@ -18,10 +18,10 @@ int createSession(int fd, int *lfd, struct sockaddr_in address, fd_set *set) {
     }
 }
 
-void destroySession(int fd, int *lfd, fd_set *set) {
+void destroySession(int fd, fd_set *set) {
     FD_CLR(fd, set);
-    if (fd == *lfd) {
-        *lfd--;
+    if (fd == lfd) {
+        lfd--;
     }
     close(fd);
     free(s[fd].buffer);

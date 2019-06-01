@@ -106,7 +106,7 @@ void fdActivityHandler(fd_set *read_fds, int fd_listen, void *buffer, size_t buf
                         ntohs(new_client.sin_port),
                         fd_new_client);
 
-                if (!createSession(fd_new_client, &lfd, new_client, &set)) {
+                if (!createSession(fd_new_client, new_client, &set)) {
                     fprintf(stderr, "HOST_IS_TOO_BUSY");
                     send(fd_new_client, "HOST_IS_TOO_BUSY", 16, 0);
                     close(fd_new_client);
@@ -125,7 +125,7 @@ void fdActivityHandler(fd_set *read_fds, int fd_listen, void *buffer, size_t buf
                         handler(fd_active, &s[fd_active]);
                     }
                     shutdown(fd_active, SHUT_WR);
-                    destroySession(fd_active, &lfd, &set);
+                    destroySession(fd_active, &set);
                 } else if (bytes > 0) {
                     size_t offset = s[fd_active].chunks ? s[fd_active].bytes - 1 : 0;
                     s[fd_active].buffer = realloc(s[fd_active].buffer, s[fd_active].bytes + bytes - 1);
