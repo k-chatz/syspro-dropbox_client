@@ -13,49 +13,20 @@
 #include <sys/stat.h>
 #include <fcntl.h>
 #include "list.h"
+#include "session.h"
+#include "handlers.h"
+#include "file.h"
+#include "buffer.h"
+#include "client.h"
 
 #define COLOR "\x1B[33m"
 #define RESET "\x1B[0m"
 
-typedef struct session {
-    size_t bytes;
-    void *buffer;
-    int chunks;
-    struct sockaddr_in address;
-} Session;
-
-typedef struct client {
-    in_addr_t ip;
-    in_port_t port;
-} *Client;
-
-typedef struct file_t {
-    char pathname[128];
-    long int version;
-} *file_t_ptr;
-
-typedef struct {
-    in_addr_t ip;
-    in_port_t port;
-    char pathname[128];
-    long int version;
-} circular_buffer_t;
-
-typedef struct {
-    circular_buffer_t *buffer;
-    int start;
-    int end;
-    int count;
-} pool_t;
-
 static volatile int quit_request = 0;
 
 char *dirname = NULL, *serverIP = NULL;
-
-pthread_cond_t cond_nonempty;
-pthread_cond_t cond_nonfull;
+pthread_cond_t condNonEmpty, condNonFull;
 pthread_mutex_t mtx_client_list, mtx_pool;
-
 pool_t pool;
 List client_list = NULL;
 Session s[FD_SETSIZE];
@@ -64,24 +35,6 @@ fd_set set;
 int workerThreads = 0, bufferSize = 0, lfd = 0;
 uint16_t portNum = 0, serverPort = 0;
 struct in_addr currentHostAddr;
-
-void createCircularBuffer(pool_t *pool) {
-    int i;
-    pool->buffer = malloc(bufferSize * sizeof(circular_buffer_t));
-    for (i = 0; i < bufferSize; i++) {
-        pool->buffer[i].ip = 0;
-        pool->buffer[i].port = 0;
-        bzero(pool->buffer[i].pathname, 128);
-        pool->buffer[i].version = 0;
-    }
-    pool->start = 0;
-    pool->end = -1;
-    pool->count = 0;
-}
-
-void destroyCircularBuffer(pool_t *pool) {
-    free(pool->buffer);
-}
 
 void wrongOptionValue(char *opt, char *val) {
     fprintf(stderr, "\nWrong value [%s] for option '%s'\n", val, opt);
@@ -151,37 +104,6 @@ static void hdl(int sig) {
     quit_request = 1;
 }
 
-void place(pool_t *pool, in_addr_t ip, in_port_t port, char *pathname, long version) {
-    pthread_mutex_lock(&mtx_pool);
-    while (pool->count >= bufferSize) {
-        printf(">> Found Buffer Full \n");
-        pthread_cond_wait(&cond_nonfull, &mtx_pool);
-    }
-    pool->end = (pool->end + 1) % bufferSize;
-    pool->buffer[pool->end].ip = ip;
-    pool->buffer[pool->end].port = port;
-    strcpy(pool->buffer[pool->end].pathname, pathname);
-    pool->buffer[pool->end].version = version;
-    pool->count++;
-    pthread_mutex_unlock(&mtx_pool);
-}
-
-circular_buffer_t obtain(pool_t *pool) {
-    circular_buffer_t data;
-    pthread_mutex_lock(&mtx_pool);
-    while (pool->count <= 0) {
-        printf(">> Found Buffer Empty \n");
-        pthread_cond_wait(&cond_nonempty, &mtx_pool);
-    }
-    data.ip = pool->buffer[pool->start].ip;
-    data.port = pool->buffer[pool->start].port;
-    strcpy(data.pathname, pool->buffer[pool->start].pathname);
-    data.version = pool->buffer[pool->start].version;
-    pool->start = (pool->start + 1) % bufferSize;
-    pool->count--;
-    pthread_mutex_unlock(&mtx_pool);
-    return data;
-}
 
 /**
  * Open TCP connection.*/
@@ -218,17 +140,6 @@ Client createClient(in_addr_t addr, in_port_t port) {
     return c;
 }
 
-void printClientTuple(Client c) {
-    struct sockaddr_in addr;
-    addr.sin_family = AF_INET;
-    addr.sin_addr.s_addr = c->ip;
-    addr.sin_port = c->port;
-    fprintf(stdout, "<%s, %d> ", inet_ntoa(addr.sin_addr), ntohs(c->port));
-}
-
-void printFileTuple(file_t_ptr file) {
-    fprintf(stdout, "<%s, %ld> ", file->pathname, file->version);
-}
 
 void initSessionArray() {
     for (int i = 0; i < FD_SETSIZE; i++) {
@@ -262,52 +173,6 @@ void destroySession(int fd) {
     close(fd);
     free(s[fd].buffer);
     s[fd].buffer = NULL;
-}
-
-/**
- * Read directory & subdirectories recursively*/
-void rec_readdir(List files, const char *_p, char *input_dir) {
-    char dirName[PATH_MAX], path[PATH_MAX], *fileName = NULL;
-    struct dirent *d = NULL;
-    struct stat s = {0};
-    DIR *dir = NULL;
-    file_t_ptr file = NULL;
-    if ((dir = opendir(_p))) {
-        while ((d = readdir(dir))) {
-            if (!strcmp(d->d_name, ".") || !strcmp(d->d_name, "..")) {
-                continue;
-            }
-
-            /* Construct real path.*/
-            if (sprintf(path, "%s/%s", _p, d->d_name) < 0) {
-                fprintf(stderr, "\n%s:%d-sprintf error\n", __FILE__, __LINE__);
-                exit(EXIT_FAILURE);
-            }
-
-            /* Get file statistics*/
-            if (!stat(path, &s)) {
-                fileName = path + strlen(input_dir) + 1;
-                if (S_ISDIR(s.st_mode)) {
-                    strcpy(dirName, fileName);
-                    strcat(dirName, "/\0");
-                    file = malloc(sizeof(struct file_t));
-                    strcpy(file->pathname, dirName);
-                    file->version = s.st_ctim.tv_nsec;
-                    listInsert(files, file);
-                    rec_readdir(files, path, input_dir);
-                } else if (S_ISREG(s.st_mode)) {
-                    file = malloc(sizeof(struct file_t));
-                    strcpy(file->pathname, fileName);
-                    file->version = s.st_ctim.tv_nsec;
-                    listInsert(files, file);
-                }
-            } else {
-                fprintf(stderr, "\n%s:%d-[%s] stat error: '%s'\n", __FILE__, __LINE__, path, strerror(errno));
-                exit(EXIT_FAILURE);
-            }
-        }
-        closedir(dir);
-    }
 }
 
 void req_get_file_list(in_addr_t ip, in_port_t port) {
@@ -398,266 +263,6 @@ void req_log_off(in_addr_t ip, in_port_t port) {
     }
 }
 
-void handle_req_get_file_list(int fd_client, Session *session) {
-    unsigned int files = 0;
-    int found = 0;
-    Client c = NULL, client = NULL;
-    List file_list = NULL;
-    file_t_ptr file = NULL;
-    c = malloc(sizeof(struct client));
-    memcpy(c, session->buffer + 13, sizeof(struct client));
-    printClientTuple(c);
-    fprintf(stdout, "\n");
-    listSetCurrentToStart(client_list);
-    while ((client = listNext(client_list)) != NULL) {
-        if (c->ip == client->ip && c->port == client->port) {
-            found = true;
-            break;
-        }
-    }
-    if (found) {
-        listCreate(&file_list);
-        rec_readdir(file_list, dirname, dirname);
-        files = listGetLength(file_list);
-        send(fd_client, "FILE_LIST", 9, 0);
-        send(fd_client, &files, sizeof(unsigned int), 0);
-        fprintf(stdout, "FILE_LIST %d ", files);
-        listSetCurrentToStart(file_list);
-        while ((file = listNext(file_list)) != NULL) {
-            send(fd_client, file, sizeof(struct file_t), 0);
-            printFileTuple(file);
-        }
-        fprintf(stdout, "\n");
-    } else {
-        free(c);
-        send(fd_client, "ERROR_IP_PORT_NOT_FOUND_IN_LIST", 31, 0);
-        fprintf(stderr, "ERROR_IP_PORT_NOT_FOUND_IN_LIST\n");
-    }
-}
-
-void handle_req_get_file(int fd_client, Session *session) {
-    Client c = NULL, client = NULL;
-    int found = 0, offset = 0, fd_file = 0;
-    file_t_ptr file = NULL;
-    struct stat s = {0};
-    char path[PATH_MAX], buff[1024];
-    ssize_t n = 0;
-
-    offset = 8;
-    found = false;
-    c = malloc(sizeof(struct client));
-    memcpy(c, session->buffer + offset, sizeof(struct client));
-    offset += sizeof(struct client);
-    printClientTuple(c);
-    fprintf(stdout, " ");
-    listSetCurrentToStart(client_list);
-    while ((client = listNext(client_list)) != NULL) {
-        if (c->ip == client->ip && c->port == client->port) {
-            found = true;
-            break;
-        }
-    }
-    if (found) {
-        file = malloc(sizeof(struct file_t));
-        memcpy(file, session->buffer + offset, sizeof(struct file_t));
-        offset += sizeof(struct file_t);
-        printFileTuple(file);
-
-        /* Construct real path.*/
-        if (sprintf(path, "%s/%s", dirname, file->pathname) < 0) {
-            fprintf(stderr, "\n%s:%d-sprintf error\n", __FILE__, __LINE__);
-            exit(EXIT_FAILURE);
-        }
-
-        /* Get file statistics*/
-        if (!stat(path, &s)) {
-            if (file->version == s.st_ctim.tv_nsec) {
-                send(fd_client, "FILE_UP_TO_DATE", 15, 0);
-                fprintf(stdout, "FILE_UP_TO_DATE");
-            } else {
-                long int version = 0, bytes = 0;
-                size_t fileNameLength = strlen(file->pathname);
-                char *filename = NULL;
-
-                send(fd_client, "FILE", 4, 0);
-                fprintf(stdout, "\nFILE ");
-
-                /* File name length*/
-                send(fd_client, &fileNameLength, sizeof(size_t), 0);
-                fprintf(stdout, "%ld ", fileNameLength);
-
-                /* File name*/
-                send(fd_client, file->pathname, fileNameLength, 0);
-                fprintf(stdout, "%s ", file->pathname);
-
-                /* File version*/
-                send(fd_client, &s.st_ctim.tv_nsec, sizeof(long int), 0);
-                fprintf(stdout, "%ld ", s.st_ctim.tv_nsec);
-
-                if (S_ISDIR(s.st_mode)) {
-
-                    /* Number of bytes*/
-                    send(fd_client, 0, sizeof(long int), 0);
-                    fprintf(stdout, "0 ");
-                } else if (S_ISREG(s.st_mode)) {
-
-                    /* Number of bytes*/
-                    send(fd_client, &s.st_size, sizeof(long int), 0);
-                    fprintf(stdout, "%ld ", s.st_size);
-
-                    /* Open file*/
-                    if ((fd_file = open(path, O_RDONLY)) < 0) {
-                        fprintf(stderr, "\n%s:%d-file %s open error: '%s'\n", __FILE__, __LINE__, path,
-                                strerror(errno));
-                    }
-
-                    /* Send whole file byte-byte.*/
-                    if (s.st_size > 0) {
-                        do {
-                            if ((n = read(fd_file, buff, 1024)) > 0) {
-                                fprintf(stdout, ".");
-                                if (send(fd_client, buff, (size_t) n, 0) < 0) {
-                                    fprintf(stderr, "\n%s:%d-fifo write error: '%s'\n", __FILE__, __LINE__,
-                                            strerror(errno));
-                                }
-                            }
-                        } while (n == 1024);
-                    }
-                    fprintf(stdout, "\n");
-                }
-            }
-        } else {
-            send(fd_client, "FILE_NOT_FOUND", 14, 0);
-            fprintf(stderr, "\n%s:%d-[%s] stat error: '%s'\n", __FILE__, __LINE__, path, strerror(errno));
-        }
-        free(file);
-    } else {
-        free(c);
-        send(fd_client, "ERROR_IP_PORT_NOT_FOUND_IN_LIST", 31, 0);
-        fprintf(stderr, "ERROR_IP_PORT_NOT_FOUND_IN_LIST\n");
-    }
-}
-
-void handle_req_user_on(int fd_client, Session *session) {
-    Client c = NULL, client = NULL;
-    int found = 0;
-    file_t_ptr file = NULL;
-
-    found = false;
-    c = malloc(sizeof(struct client));
-    memcpy(c, session->buffer + 7, sizeof(struct client));
-    printClientTuple(c);
-    fprintf(stdout, "\n");
-    listSetCurrentToStart(client_list);
-    while ((client = listNext(client_list)) != NULL) {
-        if (c->ip == client->ip && c->port == client->port) {
-            found = true;
-            fprintf(stderr, "Duplicate entry!\n");
-            break;
-        }
-    }
-    if (!found) {
-        if (!listInsert(client_list, c)) {
-            fprintf(stderr, "Insert error!\n");
-            free(c);
-        } else {
-            place(&pool, c->ip, c->port, "", 0);
-            pthread_cond_signal(&cond_nonempty);
-        }
-    } else {
-        free(c);
-    }
-}
-
-void handle_req_user_off(int fd_client, Session *session) {
-    Client c = NULL, client = NULL;
-    int found = 0;
-    c = malloc(sizeof(struct client));
-    memcpy(c, session->buffer + 8, sizeof(struct client));
-    listSetCurrentToStart(client_list);
-    while ((client = listNext(client_list)) != NULL) {
-        if (c->ip == client->ip && c->port == client->port) {
-            found = true;
-            listSetCurrentToStart(client_list);
-            if (listRemove(client_list, client)) {
-                send(fd_client, "USER_OFF_SUCCESS", 16, 0);
-                fprintf(stdout, "USER_OFF_SUCCESS\n");
-            } else {
-                send(fd_client, "ERROR_NOT_REMOVED", 17, 0);
-                fprintf(stderr, "ERROR_NOT_REMOVED\n");
-            }
-            break;
-        }
-    }
-    if (!found) {
-        send(fd_client, "ERROR_IP_PORT_NOT_FOUND_IN_LIST", 31, 0);
-        fprintf(stderr, "ERROR_IP_PORT_NOT_FOUND_IN_LIST\n");
-    }
-    free(c);
-}
-
-void handle_req_get_clients(int fd_client, Session *session) {
-    unsigned int clients = 0;
-    Client c = NULL, client = NULL;
-    c = malloc(sizeof(struct client));
-    memcpy(c, session->buffer + 11, sizeof(struct client));
-    clients = listGetLength(client_list) - 1;
-    send(fd_client, "CLIENT_LIST", 11, 0);
-    fprintf(stdout, "CLIENT_LIST ");
-    send(fd_client, &clients, sizeof(unsigned int), 0);
-    fprintf(stdout, "%d ", clients);
-    listSetCurrentToStart(client_list);
-    while ((client = listNext(client_list)) != NULL) {
-        if (!(c->ip == client->ip && c->port == client->port)) {
-            send(fd_client, client, sizeof(struct client), 0);
-            printClientTuple(client);
-        }
-    }
-    fprintf(stdout, "\n");
-    free(c);
-}
-
-void handle_res_get_file_list(int fd_client, Session *session) {
-    unsigned int files = 0;
-    int offset = 9;
-    file_t_ptr file = NULL;
-    memcpy(&files, session->buffer + offset, sizeof(unsigned int));
-    offset = offset + sizeof(unsigned int);
-    fprintf(stdout, "%d ", files);
-    for (int i = 0; i < files; i++) {
-        file = malloc(sizeof(struct file_t));
-        memcpy(file, session->buffer + offset, sizeof(struct file_t));
-        offset = offset + sizeof(struct file_t);
-        printFileTuple(file);
-        place(&pool, session->address.sin_addr.s_addr, session->address.sin_port, file->pathname, file->version);
-        pthread_cond_signal(&cond_nonempty);
-    }
-    fprintf(stdout, "\n");
-}
-
-void handle_res_get_clients(int fd_client, Session *session) {
-    unsigned int clients = 0;
-    Client c = NULL;
-    int offset = 0, i = 0;
-    offset = 11;
-    memcpy(&clients, session->buffer + offset, sizeof(unsigned int));
-    offset = offset + sizeof(unsigned int);
-    fprintf(stdout, "%d ", clients);
-    if (clients > 0) {
-        for (i = 0; i < clients; i++) {
-            c = malloc(sizeof(struct client));
-            memcpy(c, session->buffer + offset, sizeof(struct client));
-            offset = offset + sizeof(struct client);
-            if (listInsert(client_list, c)) {
-                printClientTuple(c);
-            }
-            place(&pool, session->address.sin_addr.s_addr, session->address.sin_port, "", 0);
-            pthread_cond_signal(&cond_nonempty);
-        }
-    }
-    fprintf(stdout, "\n");
-}
-
 void *worker(void *ptr) {
     circular_buffer_t data;
     printf("I am worker: %d\n", *((int *) ptr));
@@ -672,7 +277,7 @@ void *worker(void *ptr) {
             req_get_file(data.ip, data.port, file);
             free(file);
         }
-        pthread_cond_signal(&cond_nonfull);
+        pthread_cond_signal(&condNonFull);
     }
 }
 
@@ -820,8 +425,8 @@ int main(int argc, char *argv[]) {
     pthread_mutex_init(&mtx_client_list, 0);
     pthread_mutex_init(&mtx_pool, 0);
 
-    pthread_cond_init(&cond_nonempty, 0);
-    pthread_cond_init(&cond_nonfull, 0);
+    pthread_cond_init(&condNonEmpty, 0);
+    pthread_cond_init(&condNonFull, 0);
 
     timeout.tv_sec = 3600;
     timeout.tv_nsec = 0;
@@ -1026,8 +631,8 @@ int main(int argc, char *argv[]) {
 
     listDestroy(&client_list);
 
-    pthread_cond_destroy(&cond_nonempty);
-    pthread_cond_destroy(&cond_nonfull);
+    pthread_cond_destroy(&condNonEmpty);
+    pthread_cond_destroy(&condNonFull);
 
     pthread_mutex_destroy(&mtx_client_list);
     pthread_mutex_destroy(&mtx_pool);
