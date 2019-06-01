@@ -1,17 +1,10 @@
-#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <sys/socket.h>
-#include <netinet/in.h>
-#include <arpa/inet.h>
-#include <zconf.h>
-#include <netdb.h>
-#include <signal.h>
-#include <errno.h>
 #include <pthread.h>
-#include <dirent.h>
-#include <sys/stat.h>
-#include <fcntl.h>
+#include <signal.h>
+#include <zconf.h>
+#include <arpa/inet.h>
+#include <errno.h>
 #include "list.h"
 #include "session.h"
 #include "handler.h"
@@ -19,9 +12,7 @@
 #include "buffer.h"
 #include "client.h"
 #include "request.h"
-
-#define COLOR "\x1B[33m"
-#define RESET "\x1B[0m"
+#include "connection.h"
 
 static volatile int quit_request = 0;
 
@@ -123,21 +114,20 @@ void *worker(void *ptr) {
 }
 
 int main(int argc, char *argv[]) {
-    struct sockaddr *new_client_ptr = NULL;
-    struct sockaddr_in new_client;
+
     struct sockaddr *listen_ptr = NULL;
     struct sockaddr_in listen_in_addr;
     struct hostent *hostEntry = NULL;
-    struct timespec timeout;
+
     struct sigaction sa;
-    int opt = 1, fd_listen = 0, fd_new_client = 0, activity = 0, fd_active = 0;
+    int opt = 1, fd_listen = 0;
     char hostBuffer[256], *currentHostStrIp = NULL;
     void *rcv_buffer = NULL;
-    ssize_t bytes = 0;
+
     fd_set read_fds;
-    size_t socket_rcv_size = 0, socket_snd_size = 0;
+    size_t socket_rcv_size = 0;
     socklen_t st_rcv_len = 0, st_snd_len = 0;
-    socklen_t client_len = 0;
+
 
     /* Read argument options from command line*/
     readOptions(argc, argv, &dirname, &portNum, &workerThreads, &bufferSize, &serverPort, &serverIP);
@@ -150,8 +140,6 @@ int main(int argc, char *argv[]) {
     pthread_cond_init(&condNonEmpty, 0);
     pthread_cond_init(&condNonFull, 0);
 
-    timeout.tv_sec = 3600;
-    timeout.tv_nsec = 0;
 
     /* Initialize file descriptor sets.*/
     FD_ZERO(&set);
@@ -179,14 +167,12 @@ int main(int argc, char *argv[]) {
     currentHostStrIp = strdup(inet_ntoa(currentHostAddr));
 
     st_rcv_len = sizeof(socket_rcv_size);
-    st_snd_len = sizeof(socket_snd_size);
-    client_len = sizeof(struct sockaddr);
 
     listen_ptr = (struct sockaddr *) &listen_in_addr;
-    new_client_ptr = (struct sockaddr *) &new_client;
+
 
     memset(listen_ptr, 0, sizeof(struct sockaddr));
-    memset(new_client_ptr, 0, sizeof(struct sockaddr));
+
 
     /* Setup listening address*/
     listen_in_addr.sin_family = AF_INET;
@@ -206,7 +192,6 @@ int main(int argc, char *argv[]) {
     FD_SET(fd_listen, &set);
 
     getsockopt(fd_listen, SOL_SOCKET, SO_RCVBUF, (void *) &socket_rcv_size, &st_rcv_len);
-    getsockopt(fd_listen, SOL_SOCKET, SO_SNDBUF, (void *) &socket_snd_size, &st_snd_len);
 
     rcv_buffer = malloc(socket_rcv_size + 1);
 
@@ -252,92 +237,13 @@ int main(int argc, char *argv[]) {
     /****************************************************************************************************/
 
     fprintf(stdout, "::Waiting for connections on %s:%d::\n", currentHostStrIp, portNum);
-
     while (!quit_request) {
-        read_fds = set;
-        activity = pselect(lfd + 1, &read_fds, NULL, NULL, &timeout, &oldset);
-        if (activity < 0 && (errno != EINTR)) {
-            perror("select");
-        } else if (activity == 0) {
-            for (int i = 0; i < FD_SETSIZE; i++) {
-                if (s[i].buffer != NULL) {
-                    fprintf(stdout, "The request timed out, connection on socket %d is about to be closed ...\n", i);
-                    fprintf(stdout, "::%ld bytes were transferred into %d different chunks on socket %d::\n",
-                            s[i].bytes - 1,
-                            s[i].chunks, i);
-                    fprintf(stdout, "::"COLOR" %s "RESET"::\n",
-                            (s[fd_active].bytes - 1 > 0) ? (char *) s[fd_active].buffer : "(Empty response body)");
-                    shutdown(fd_active, SHUT_RD);
-                    if (s[fd_active].bytes - 1 > 0) {
-                        handler(fd_active, &s[fd_active]);
-                    }
-                    shutdown(i, SHUT_WR);
-                    FD_CLR(i, &set);
-                    if (i == lfd) {
-                        lfd--;
-                    }
-                    close(i);
-                    free(s[i].buffer);
-                    s[i].buffer = NULL;
-                };
-            }
-            continue;
-        }
-
+        fdMonitor(&set, &read_fds, &oldset);
         if (quit_request) {
             fprintf(stdout, "C[%d]: quiting ...""\n", getpid());
             break;
         }
-
-        for (fd_active = 0; fd_active <= lfd; fd_active++) {
-            if (FD_ISSET(fd_active, &read_fds)) {
-                if (fd_active == fd_listen) {
-
-                    if ((fd_new_client = accept(fd_active, new_client_ptr, &client_len)) < 0) {
-                        perror("accept");
-                        break;
-                    }
-                    fprintf(stdout, "::Accept new client (%s:%d) on socket %d::\n",
-                            inet_ntoa(new_client.sin_addr),
-                            ntohs(new_client.sin_port),
-                            fd_new_client);
-
-                    if (!createSession(fd_new_client, &lfd, new_client, NULL)) {
-                        fprintf(stderr, "HOST_IS_TOO_BUSY");
-                        send(fd_new_client, "HOST_IS_TOO_BUSY", 16, 0);
-                        close(fd_new_client);
-                    }
-                } else {
-                    bzero(rcv_buffer, socket_rcv_size);
-                    bytes = recv(fd_active, rcv_buffer, socket_rcv_size, 0);
-                    if (bytes == 0) {
-                        fprintf(stdout, "::%ld bytes were transferred into %d different chunks on socket %d::\n",
-                                s[fd_active].bytes - 1,
-                                s[fd_active].chunks, fd_active);
-                        fprintf(stdout, "::"COLOR" %s "RESET"::\n",
-                                (s[fd_active].bytes - 1 > 0) ? (char *) s[fd_active].buffer : "(Empty response body)");
-                        shutdown(fd_active, SHUT_RD);
-                        if (s[fd_active].bytes - 1 > 0) {
-                            handler(fd_active, &s[fd_active]);
-                        }
-                        shutdown(fd_active, SHUT_WR);
-                        destroySession(fd_active, &lfd, &set);
-                    } else if (bytes > 0) {
-                        size_t offset = s[fd_active].chunks ? s[fd_active].bytes - 1 : 0;
-                        s[fd_active].buffer = realloc(s[fd_active].buffer, s[fd_active].bytes + bytes - 1);
-                        memcpy(s[fd_active].buffer + offset, rcv_buffer, (size_t) bytes);
-                        s[fd_active].bytes += bytes;
-                        s[fd_active].chunks++;
-                        //fprintf(stdout,"::Receive %ld bytes from chunk %d on socket %d::\n", bytes, s[fd_active].chunks, fd_active);
-                        //fprintf(stdout,COLOR"%s"RESET"\n", (char *) rcv_buffer);
-                    } else {
-                        perror("recv");
-                        send(fd_active, "-", 1, 0);
-                        close(fd_active);
-                    }
-                }
-            }
-        }
+        fdActivityHandler(&read_fds, rcv_buffer, socket_rcv_size);
     }
 
     /* Inform server with a LOG_OFF message.*/
@@ -349,6 +255,7 @@ int main(int argc, char *argv[]) {
     }
 
     free(currentHostStrIp);
+
     free(rcv_buffer);
 
     listDestroy(&client_list);
