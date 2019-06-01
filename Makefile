@@ -1,12 +1,12 @@
-OBJS	= main.o list.o buffer.o connection.o client.o file.o handler.o request.o session.o
-SOURCE	= main.c list.c buffer.c connection.c client.c file.c handler.c request.c session.c
-HEADER	= list.h buffer.h client.h connection.h file.h handler.h request.h session.h
+OBJS    = main.o list.o buffer.o connection.o client.o file.o handler.o request.o session.o
+SOURCE  = main.c list.c buffer.c connection.c client.c file.c handler.c request.c session.c
+HEADER  = list.h buffer.h client.h connection.h file.h handler.h request.h session.h
 OUT	= dropbox_client
-CC	 = gcc
-FLAGS	 = -c -Wall
+CC  = gcc
+FLAGS   = -c -Wall
 
 all: $(OBJS)
-	$(CC) $(OBJS) -o $(OUT)
+	$(CC) $(OBJS) -o $(OUT) -pthread
 
 main.o: main.c
 	$(CC) $(FLAGS) main.c
@@ -24,16 +24,16 @@ client.o: client.c
 	$(CC) $(FLAGS) client.c
 
 file.o: file.c
-    $(CC) $(FLAGS) file.c
+	$(CC) $(FLAGS) file.c
 
 handler.o: handler.c
-    $(CC) $(FLAGS) handler.c
+	$(CC) $(FLAGS) handler.c
 
 request.o: request.c
-    $(CC) $(FLAGS) request.c
+	$(CC) $(FLAGS) request.c
 
 session.o: session.c
-    $(CC) $(FLAGS) session.c
+	$(CC) $(FLAGS) session.c
 
 clean:
 	rm -f $(OBJS) $(OUT)

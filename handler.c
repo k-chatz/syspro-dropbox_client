@@ -167,10 +167,7 @@ void handle_req_get_file(int fd_client, Session *session) {
                 send(fd_client, "FILE_UP_TO_DATE", 15, 0);
                 fprintf(stdout, "FILE_UP_TO_DATE");
             } else {
-                long int version = 0, bytes = 0;
                 size_t fileNameLength = strlen(file->pathname);
-                char *filename = NULL;
-
                 send(fd_client, "FILE", 4, 0);
                 fprintf(stdout, "\nFILE ");
 
@@ -233,8 +230,6 @@ void handle_req_get_file(int fd_client, Session *session) {
 void handle_req_user_on(int fd_client, Session *session) {
     Client c = NULL, client = NULL;
     int found = 0;
-    file_t_ptr file = NULL;
-
     found = false;
     c = malloc(sizeof(struct client));
     memcpy(c, session->buffer + 7, sizeof(struct client));

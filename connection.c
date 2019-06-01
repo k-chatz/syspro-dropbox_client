@@ -48,7 +48,6 @@ int openConnection(struct sockaddr_in address) {
  * fd Monitor.*/
 void fdMonitor(fd_set *set, fd_set *read_fds, sigset_t *oldset) {
     struct timespec timeout;
-    ssize_t bytes = 0;
     int activity = 0, fd_active = 0;
     *read_fds = *set;
     timeout.tv_sec = 3600;

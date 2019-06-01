@@ -126,8 +126,7 @@ int main(int argc, char *argv[]) {
 
     fd_set read_fds;
     size_t socket_rcv_size = 0;
-    socklen_t st_rcv_len = 0, st_snd_len = 0;
-
+    socklen_t st_rcv_len = 0;
 
     /* Read argument options from command line*/
     readOptions(argc, argv, &dirname, &portNum, &workerThreads, &bufferSize, &serverPort, &serverIP);
