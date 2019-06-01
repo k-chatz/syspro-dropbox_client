@@ -13,7 +13,7 @@
 #include "handler.h"
 #include "request.h"
 
-#define COLOR "\x1B[33m"
+#define YELLOW "\x1B[33m"
 #define RESET "\x1B[0m"
 
 /**
@@ -62,7 +62,7 @@ void fdMonitor(fd_set *set, fd_set *read_fds, sigset_t *oldset) {
                 fprintf(stdout, "::%ld bytes were transferred into %d different chunks on socket %d::\n",
                         s[i].bytes - 1,
                         s[i].chunks, i);
-                fprintf(stdout, "::"COLOR" %s "RESET"::\n",
+                fprintf(stdout, "::"YELLOW" %s "RESET"::\n",
                         (s[fd_active].bytes - 1 > 0) ? (char *) s[fd_active].buffer : "(Empty response body)");
                 shutdown(fd_active, SHUT_RD);
                 if (s[fd_active].bytes - 1 > 0) {
@@ -118,7 +118,7 @@ void fdActivityHandler(fd_set *read_fds, void *buffer, size_t bufferSize) {
                     fprintf(stdout, "::%ld bytes were transferred into %d different chunks on socket %d::\n",
                             s[fd_active].bytes - 1,
                             s[fd_active].chunks, fd_active);
-                    fprintf(stdout, "::"COLOR" %s "RESET"::\n",
+                    fprintf(stdout, "::"YELLOW" %s "RESET"::\n",
                             (s[fd_active].bytes - 1 > 0) ? (char *) s[fd_active].buffer : "(Empty response body)");
                     shutdown(fd_active, SHUT_RD);
                     if (s[fd_active].bytes - 1 > 0) {
@@ -133,10 +133,9 @@ void fdActivityHandler(fd_set *read_fds, void *buffer, size_t bufferSize) {
                     s[fd_active].bytes += bytes;
                     s[fd_active].chunks++;
                     //fprintf(stdout,"::Receive %ld bytes from chunk %d on socket %d::\n", bytes, s[fd_active].chunks, fd_active);
-                    //fprintf(stdout,COLOR"%s"RESET"\n", (char *) rcv_buffer);
+                    //fprintf(stdout,YELLOW"%s"RESET"\n", (char *) rcv_buffer);
                 } else {
                     perror("recv");
-                    send(fd_active, "-", 1, 0);
                     close(fd_active);
                 }
             }

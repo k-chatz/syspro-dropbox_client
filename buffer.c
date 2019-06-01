@@ -4,6 +4,9 @@
 #include <string.h>
 #include "buffer.h"
 
+#define GREEN "\x1b[32m"
+#define RESET "\x1B[0m"
+
 void createCircularBuffer(pool_t *pool) {
     int i;
     pool->buffer = malloc(bufferSize * sizeof(circular_buffer_t));
@@ -25,7 +28,7 @@ void destroyCircularBuffer(pool_t *pool) {
 void place(pool_t *pool, in_addr_t ip, in_port_t port, char *pathname, long version) {
     pthread_mutex_lock(&mtx_pool);
     while (pool->count >= bufferSize) {
-        printf(">> Found Buffer Full \n");
+        printf(GREEN"PLACE: >> Found Buffer Full \n"RESET);
         pthread_cond_wait(&condNonFull, &mtx_pool);
     }
     pool->end = (pool->end + 1) % bufferSize;
@@ -41,7 +44,7 @@ circular_buffer_t obtain(pool_t *pool) {
     circular_buffer_t data;
     pthread_mutex_lock(&mtx_pool);
     while (pool->count <= 0) {
-        printf(">> Found Buffer Empty \n");
+        printf(GREEN"OBTAIN >> Found Buffer Empty \n"RESET);
         pthread_cond_wait(&condNonEmpty, &mtx_pool);
     }
     data.ip = pool->buffer[pool->start].ip;

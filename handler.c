@@ -8,11 +8,15 @@
 #include <dirent.h>
 #include <fcntl.h>
 #include <errno.h>
+#include <arpa/inet.h>
 #include "handler.h"
 #include "list.h"
 #include "client.h"
 #include "file.h"
 #include "buffer.h"
+
+#define LIGHT_BLUE "\x1b[94m"
+#define RESET "\x1B[0m"
 
 void mkdirs(char *path) {
     struct stat s = {0};
@@ -252,6 +256,7 @@ void handle_req_user_on(int fd_client, Session *session) {
             fprintf(stderr, "Insert error!\n");
             free(c);
         } else {
+            printf(LIGHT_BLUE"Main thread place %d...\n"RESET, ntohs(c->port));
             place(&pool, c->ip, c->port, "", 0);
             pthread_cond_signal(&condNonEmpty);
         }
@@ -335,6 +340,7 @@ void handle_res_get_file_list(int fd_client, Session *session) {
         memcpy(file, session->buffer + offset, sizeof(struct file_t));
         offset = offset + sizeof(struct file_t);
         printFileTuple(file);
+        printf(LIGHT_BLUE"Main thread place %d...\n"RESET, ntohs(session->address.sin_port));
         place(&pool, session->address.sin_addr.s_addr, session->address.sin_port, file->pathname, file->version);
         pthread_cond_signal(&condNonEmpty);
     }
@@ -415,6 +421,7 @@ void handle_res_get_clients(int fd_client, Session *session) {
 
             pthread_mutex_unlock(&mtx_client_list);
 
+            printf(LIGHT_BLUE"Main thread place %d...\n"RESET, ntohs(session->address.sin_port));
             place(&pool, session->address.sin_addr.s_addr, session->address.sin_port, "", 0);
             pthread_cond_signal(&condNonEmpty);
         }

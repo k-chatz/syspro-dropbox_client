@@ -15,6 +15,9 @@
 #include "connection.h"
 #include "options.h"
 
+#define GREEN "\x1b[32m"
+#define RESET "\x1B[0m"
+
 static volatile int quit_request = 0;
 
 int workerThreads = 0, bufferSize = 0, lfd = 0;
@@ -36,15 +39,17 @@ static void hdl(int sig) {
 
 void *worker(void *ptr) {
     circular_buffer_t data;
-    printf("I am worker: %d\n", *((int *) ptr));
     while (1) {
+        printf(GREEN"%d working ...\n"RESET, *((int *) ptr));
         data = obtain(&pool);
         if (strcmp(data.pathname, "") == 0 && data.version == 0) {
+            printf(GREEN"%d working on req_get_file_list ...\n"RESET, *((int *) ptr));
             req_get_file_list(data.ip, data.port);
         } else {
             file_t_ptr file = malloc(sizeof(struct file_t));
             strcpy(file->pathname, data.pathname);
             file->version = 0;//data.version;
+            printf(GREEN"%d working on req_get_file ...\n"RESET, *((int *) ptr));
             req_get_file(data.ip, data.port, file);
             free(file);
         }
