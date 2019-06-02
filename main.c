@@ -38,22 +38,23 @@ static void hdl(int sig) {
 }
 
 void *worker(void *ptr) {
+    pthread_t id = pthread_self();
     circular_buffer_t data;
     while (!quit_request) {
-        printf(GREEN"%d working ...\n"RESET, *((int *) ptr));
+        printf(GREEN"Worker %d:%ld working ...\n"RESET, *((int *) ptr), id);
         data = obtain(&pool);
+        pthread_cond_signal(&condNonFull);
         if (strcmp(data.pathname, "") == 0 && data.version == 0) {
-            printf(GREEN"%d working on req_get_file_list ...\n"RESET, *((int *) ptr));
+            printf(GREEN"Worker %d working on req_get_file_list ...\n"RESET, *((int *) ptr));
             req_get_file_list(data.ip, data.port);
         } else {
             file_t_ptr file = malloc(sizeof(struct file_t));
             strcpy(file->pathname, data.pathname);
             file->version = 0;//data.version;
-            printf(GREEN"%d working on req_get_file ...\n"RESET, *((int *) ptr));
+            printf(GREEN"Worker %d working on req_get_file ...\n"RESET, *((int *) ptr));
             req_get_file(data.ip, data.port, file);
             free(file);
         }
-        pthread_cond_signal(&condNonFull);
     }
     pthread_exit(0);
 }
@@ -174,6 +175,7 @@ int main(int argc, char *argv[]) {
     createCircularBuffer(&pool);
 
     /* Create worker threads.*/
+    fprintf(stdout, "Creating workers ...\n");
     for (int i = 0; i < workerThreads; i++) {
         pthread_create(&workers[i], NULL, worker, &i);
     }

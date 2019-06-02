@@ -14,6 +14,7 @@
 #include "request.h"
 
 #define YELLOW "\x1B[33m"
+#define LIGHT_BLUE "\x1b[94m"
 #define RESET "\x1B[0m"
 
 /**
