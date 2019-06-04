@@ -60,17 +60,16 @@ void *worker(void *ptr) {
 }
 
 int main(int argc, char *argv[]) {
-
     struct sockaddr *listen_ptr = NULL;
     struct sockaddr_in listen_in_addr;
     struct hostent *hostEntry = NULL;
-
     struct sigaction sa;
     int opt = 1, fd_listen = 0;
     char hostBuffer[256], *currentHostStrIp = NULL;
     void *rcv_buffer = NULL;
 
     fd_set read_fds;
+
     size_t socket_rcv_size = 0;
     socklen_t st_rcv_len = 0;
 
@@ -86,9 +85,6 @@ int main(int argc, char *argv[]) {
     pthread_cond_init(&condNonFull, 0);
 
 
-    /* Initialize file descriptor sets.*/
-    FD_ZERO(&set);
-    FD_ZERO(&read_fds);
 
     /* Create clients client_list.*/
     listCreate(&client_list);
@@ -115,9 +111,7 @@ int main(int argc, char *argv[]) {
 
     listen_ptr = (struct sockaddr *) &listen_in_addr;
 
-
     memset(listen_ptr, 0, sizeof(struct sockaddr));
-
 
     /* Setup listening address*/
     listen_in_addr.sin_family = AF_INET;
@@ -134,7 +128,6 @@ int main(int argc, char *argv[]) {
         lfd = fd_listen;
     }
 
-    FD_SET(fd_listen, &set);
 
     getsockopt(fd_listen, SOL_SOCKET, SO_RCVBUF, (void *) &socket_rcv_size, &st_rcv_len);
 
@@ -181,6 +174,11 @@ int main(int argc, char *argv[]) {
     }
 
     /****************************************************************************************************/
+
+    /* Initialize file descriptor sets.*/
+    FD_ZERO(&set);
+    FD_ZERO(&read_fds);
+    FD_SET(fd_listen, &set);
 
     fprintf(stdout, "::Waiting for connections on %s:%d::\n", currentHostStrIp, portNum);
     while (!quit_request) {
